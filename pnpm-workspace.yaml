@@ -1,0 +1,13 @@
+# pnpm 11 は依存のインストール時スクリプトを既定で実行しない（サプライチェーン対策）。
+# esbuild と workerd はネイティブバイナリを取得するため実行が要る。ここに挙げた
+# ものだけが走る。新しい名前が増えたら、なぜ必要かを確かめてから足すこと。
+allowBuilds:
+  esbuild: true
+  workerd: true
+
+# 公開直後の版を掴まないための待機（既定）から除外したもの。
+# 3つとも Cloudflare 公式で、この構成に必要な最新版。
+minimumReleaseAgeExclude:
+  - '@cloudflare/vite-plugin@1.52.0'
+  - miniflare@5.20260811.0-alpha
+  - wrangler@4.122.0

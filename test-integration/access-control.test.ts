@@ -1,0 +1,409 @@
+import { eq } from "drizzle-orm";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+
+import { listingImages, listings, users } from "~/db/schema/index.ts";
+import { ulid } from "~/domain/ulid";
+import type { Db } from "~/server/db.server";
+import { assertOwner } from "~/server/guards.server";
+import {
+  getPublishedListing,
+  searchListings,
+} from "~/server/repositories/listing-repository.server";
+import { resolveMediaAccess } from "~/server/services/media/media-service.server";
+import {
+  ensureThread,
+  getThreadMessages,
+  sendMessage,
+} from "~/server/services/message-service.server";
+import { transitionListing } from "~/server/services/listing-service.server";
+import { setBlock } from "~/server/services/engagement-service.server";
+import { closeTestDb, makeDraft, makeUser, resetDatabase } from "./helpers.ts";
+
+/**
+ * 権限まわり。
+ *
+ * ★「画面にボタンが無い」は防御ではない。★ ここではサービス層を
+ * 直接叩いて、他人のデータへ到達できないことを確かめる。
+ */
+let db: Db;
+let owner: { id: string };
+let stranger: { id: string };
+let admin: { id: string };
+
+beforeEach(async () => {
+  db = await resetDatabase();
+  owner = await makeUser(db, "owner@example.test");
+  stranger = await makeUser(db, "stranger@example.test");
+  admin = await makeUser(db, "admin@example.test", "admin");
+});
+
+afterAll(async () => {
+  await closeTestDb();
+});
+
+describe("下書きの閲覧", () => {
+  it("★他人の下書きは公開ページから見えない★", async () => {
+    const listingId = await makeDraft(db, owner.id);
+    expect(await getPublishedListing(db, listingId)).toBeNull();
+  });
+
+  it("★決済待ちの投稿も公開ページから見えない★", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "payment_pending" });
+    expect(await getPublishedListing(db, listingId)).toBeNull();
+  });
+
+  it("★非公開にされた投稿は見えない★", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "suspended" });
+    expect(await getPublishedListing(db, listingId)).toBeNull();
+  });
+
+  it("★期限切れの投稿は、状態が published のままでも見えない★", async () => {
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt: new Date(Date.now() - 100_000),
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    expect(await getPublishedListing(db, listingId)).toBeNull();
+
+    // 検索結果にも出ない
+    const result = await searchListings(db, { sort: "newest", page: 1, perPage: 20 });
+    expect(result.items.map((item) => item.id)).not.toContain(listingId);
+  });
+});
+
+describe("所有者の確認", () => {
+  it("★他人の投稿には 404 を返す（存在すら知らせない）★", () => {
+    let thrown: unknown;
+    try {
+      assertOwner(owner.id, {
+        id: stranger.id,
+        role: "user",
+        status: "active",
+        sessionId: "x",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // ★Response であること自体が要件。★ Error を投げると React Router が
+    // 一律 500 にしてしまい、掲載終了・不存在・他人の下書きがすべて
+    // 「サーバー障害」として索引に残る。
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    // 理由を本文に載せない（所有者IDが漏れる）
+    expect((thrown as Response).body).toBeNull();
+  });
+
+  it("本人なら通る", () => {
+    expect(() =>
+      assertOwner(owner.id, {
+        id: owner.id,
+        role: "user",
+        status: "active",
+        sessionId: "x",
+      }),
+    ).not.toThrow();
+  });
+
+  it("管理者は通る", () => {
+    expect(() =>
+      assertOwner(owner.id, {
+        id: admin.id,
+        role: "admin",
+        status: "active",
+        sessionId: "x",
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("画像の配信権限", () => {
+  async function addImage(listingId: string): Promise<string> {
+    const id = ulid();
+    const objectKey = `listings/${listingId}/${id}`;
+    await db.insert(listingImages).values({
+      id,
+      listingId,
+      objectKey,
+      contentType: "image/jpeg",
+      byteSize: 1000,
+      width: 800,
+      height: 600,
+      checksumSha256: "0".repeat(64),
+      position: 0,
+    });
+    return objectKey;
+  }
+
+  it("公開中の投稿の画像は誰でも見られる", async () => {
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt: new Date(),
+    });
+    const key = await addImage(listingId);
+
+    const access = await resolveMediaAccess({ db, objectKey: key, viewer: null });
+    expect(access.allowed).toBe(true);
+    expect(access.cacheable).toBe(true);
+  });
+
+  it("★下書きの画像は他人から見えない★", async () => {
+    const listingId = await makeDraft(db, owner.id);
+    const key = await addImage(listingId);
+
+    await expect(
+      resolveMediaAccess({ db, objectKey: key, viewer: null }),
+    ).rejects.toThrow();
+    await expect(
+      resolveMediaAccess({
+        db,
+        objectKey: key,
+        viewer: { id: stranger.id, role: "user" },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("下書きの画像は所有者と管理者だけが見られる", async () => {
+    const listingId = await makeDraft(db, owner.id);
+    const key = await addImage(listingId);
+
+    const asOwner = await resolveMediaAccess({
+      db,
+      objectKey: key,
+      viewer: { id: owner.id, role: "user" },
+    });
+    expect(asOwner.allowed).toBe(true);
+    // 共有キャッシュに残さない
+    expect(asOwner.cacheable).toBe(false);
+
+    const asAdmin = await resolveMediaAccess({
+      db,
+      objectKey: key,
+      viewer: { id: admin.id, role: "admin" },
+    });
+    expect(asAdmin.allowed).toBe(true);
+  });
+
+  it("存在しないキーは 404", async () => {
+    await expect(
+      resolveMediaAccess({ db, objectKey: "listings/x/y", viewer: null }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("メッセージの当事者制限", () => {
+  async function publishedListing(): Promise<string> {
+    return makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt: new Date(),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+  }
+
+  it("問い合わせるとスレッドが1本できる", async () => {
+    const listingId = await publishedListing();
+    const first = await ensureThread({ db, listingId, inquirerId: stranger.id });
+    const second = await ensureThread({ db, listingId, inquirerId: stranger.id });
+    expect(first.threadId).toBe(second.threadId);
+  });
+
+  it("自分の投稿には問い合わせできない", async () => {
+    const listingId = await publishedListing();
+    await expect(
+      ensureThread({ db, listingId, inquirerId: owner.id }),
+    ).rejects.toThrow();
+  });
+
+  it("公開されていない投稿には問い合わせできない", async () => {
+    const listingId = await makeDraft(db, owner.id);
+    await expect(
+      ensureThread({ db, listingId, inquirerId: stranger.id }),
+    ).rejects.toThrow();
+  });
+
+  it("★当事者以外は会話を読めない★", async () => {
+    const listingId = await publishedListing();
+    const { threadId } = await ensureThread({
+      db,
+      listingId,
+      inquirerId: stranger.id,
+    });
+    const outsider = await makeUser(db, "outsider@example.test");
+
+    await expect(
+      getThreadMessages({
+        db,
+        threadId,
+        viewerId: outsider.id,
+        viewerRole: "user",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("★当事者以外は送信できない★", async () => {
+    const listingId = await publishedListing();
+    const { threadId } = await ensureThread({
+      db,
+      listingId,
+      inquirerId: stranger.id,
+    });
+    const outsider = await makeUser(db, "outsider2@example.test");
+
+    await expect(
+      sendMessage({ db, threadId, senderId: outsider.id, body: "こんにちは" }),
+    ).rejects.toThrow();
+  });
+
+  it("当事者どうしはやり取りできる", async () => {
+    const listingId = await publishedListing();
+    const { threadId } = await ensureThread({
+      db,
+      listingId,
+      inquirerId: stranger.id,
+    });
+
+    await sendMessage({
+      db,
+      threadId,
+      senderId: stranger.id,
+      body: "まだ残っていますか？",
+    });
+    await sendMessage({
+      db,
+      threadId,
+      senderId: owner.id,
+      body: "はい、あります。",
+    });
+
+    const thread = await getThreadMessages({
+      db,
+      threadId,
+      viewerId: owner.id,
+      viewerRole: "user",
+    });
+    expect(thread.messages).toHaveLength(2);
+  });
+
+  it("★ブロックしている相手とは会話を開けない★", async () => {
+    const listingId = await publishedListing();
+    await setBlock({
+      db,
+      blockerId: owner.id,
+      blockedId: stranger.id,
+      intent: "block",
+    });
+
+    await expect(
+      ensureThread({ db, listingId, inquirerId: stranger.id }),
+    ).rejects.toThrow();
+  });
+
+  it("ブロック後は送信もできない", async () => {
+    const listingId = await publishedListing();
+    const { threadId } = await ensureThread({
+      db,
+      listingId,
+      inquirerId: stranger.id,
+    });
+    await setBlock({
+      db,
+      blockerId: owner.id,
+      blockedId: stranger.id,
+      intent: "block",
+    });
+
+    await expect(
+      sendMessage({ db, threadId, senderId: stranger.id, body: "しつこく連絡" }),
+    ).rejects.toThrow();
+  });
+
+  it("禁止ワードを含むメッセージは送れない", async () => {
+    const listingId = await publishedListing();
+    const { threadId } = await ensureThread({
+      db,
+      listingId,
+      inquirerId: stranger.id,
+    });
+
+    await expect(
+      sendMessage({
+        db,
+        threadId,
+        senderId: stranger.id,
+        body: "口座売ります。連絡ください",
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("状態遷移の強制", () => {
+  it("★下書きから直接公開できない★", async () => {
+    const listingId = await makeDraft(db, owner.id);
+    await expect(
+      transitionListing(db, { listingId, to: "published", actor: "owner" }),
+    ).rejects.toThrow();
+    const rows = await db
+      .select({ status: listings.status })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(rows[0]!.status).toBe("draft");
+  });
+
+  it("★掲載終了から公開へ戻せない★", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "closed" });
+    await expect(
+      transitionListing(db, { listingId, to: "published", actor: "admin" }),
+    ).rejects.toThrow();
+  });
+
+  it("expectedFrom を指定すると、状態が違えば何もしない", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "draft" });
+    const result = await transitionListing(db, {
+      listingId,
+      to: "published",
+      actor: "system",
+      expectedFrom: "payment_pending",
+    });
+    expect(result.changed).toBe(false);
+  });
+});
+
+describe("管理者の権限", () => {
+  it("管理者だけが投稿を非公開にできる", async () => {
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt: new Date(),
+    });
+
+    await expect(
+      transitionListing(db, {
+        listingId,
+        to: "suspended",
+        actor: "owner",
+        moderationReason: "本人が止めようとした",
+      }),
+    ).rejects.toThrow();
+
+    await transitionListing(db, {
+      listingId,
+      to: "suspended",
+      actor: "admin",
+      moderationReason: "規約違反のため",
+    });
+
+    const rows = await db
+      .select({ status: listings.status, reason: listings.moderationReason })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(rows[0]!.status).toBe("suspended");
+    expect(rows[0]!.reason).toBe("規約違反のため");
+  });
+
+  it("役割は DB 上のロールで決まる", async () => {
+    const rows = await db
+      .select({ role: users.role })
+      .from(users)
+      .where(eq(users.id, admin.id));
+    expect(rows[0]!.role).toBe("admin");
+  });
+});

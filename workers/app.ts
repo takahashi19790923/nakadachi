@@ -1,0 +1,141 @@
+import { createRequestHandler, RouterContextProvider } from "react-router";
+
+import { ulid } from "~/domain/ulid.ts";
+import { appContext } from "~/server/app-context.ts";
+import { readCookie, serializeCookie } from "~/server/cookies.server.ts";
+import {
+  csrfCookieName,
+  csrfSignature,
+  issueCsrfToken,
+} from "~/server/csrf.server.ts";
+import { createRequestDb } from "~/server/db.server.ts";
+import { toAppEnv, type AppEnv } from "~/server/env.server.ts";
+import { handleHealthCheck } from "~/server/health.server.ts";
+import { createLogger } from "~/server/logger.server.ts";
+import {
+  applySecurityHeaders,
+  generateNonce,
+} from "~/server/security-headers.server.ts";
+
+const requestHandler = createRequestHandler(
+  () => import("virtual:react-router/server-build"),
+  import.meta.env.MODE,
+);
+
+/**
+ * 本番ドメイン以外で同じ内容が見える状態を無くす。
+ *
+ * Workers は routes に custom_domain を書くと workers.dev のルートを
+ * 自動で無効化するので、通常はここに来ない。それでも残しているのは、
+ * 設定を変えた瞬間に「同じ内容が2つのホストで見える」状態へ戻るのを
+ * 防ぐため（Turnstile の hostname 照合が効かないホストが増える）。
+ *
+ * GET/HEAD は 301、それ以外は 308。301 だと POST が GET に化けて本文が消える。
+ */
+function canonicalRedirect(request: Request, env: AppEnv): Response | null {
+  const url = new URL(request.url);
+  const canonical = new URL(env.APP_ORIGIN);
+  if (url.host === canonical.host) return null;
+  // ローカル開発（127.0.0.1 と localhost の行き来）では転送しない。
+  if (env.ENVIRONMENT === "development") return null;
+
+  const target = new URL(url.pathname + url.search, canonical);
+  const status = request.method === "GET" || request.method === "HEAD" ? 301 : 308;
+  return new Response(null, {
+    status,
+    headers: { location: target.toString(), "cache-control": "no-store" },
+  });
+}
+
+export default {
+  async fetch(request, cloudflareEnv, ctx) {
+    const requestId = ulid();
+    let env: AppEnv;
+    try {
+      env = toAppEnv(cloudflareEnv);
+    } catch {
+      // 設定が壊れている状態で内部の詳細を返さない。
+      return new Response("Service Unavailable", {
+        status: 503,
+        headers: { "cache-control": "no-store" },
+      });
+    }
+
+    const logger = createLogger({ requestId, environment: env.ENVIRONMENT });
+
+    const redirect = canonicalRedirect(request, env);
+    if (redirect) return redirect;
+
+    const { getDb, dispose } = createRequestDb(env);
+    const nonce = generateNonce();
+
+    // CSRF の対（Cookie 側の乱数とフォームへ埋める署名付きトークン）を
+    // ここで1回だけ用意する。各ローダーが個別に発行すると、同じ画面の中で
+    // 別々の値が出て、後から描かれたフォームだけが通らなくなる。
+    let csrfToken: string;
+    let csrfSetCookie: string | null = null;
+    try {
+      const existing = readCookie(request, csrfCookieName(env));
+      if (existing) {
+        csrfToken = `${existing}.${await csrfSignature(env, existing)}`;
+      } else {
+        const issued = await issueCsrfToken(env);
+        csrfToken = issued.token;
+        csrfSetCookie = serializeCookie(csrfCookieName(env), issued.cookieValue, {
+          secure: env.APP_ORIGIN.startsWith("https://"),
+          httpOnly: true,
+          sameSite: "Lax",
+          path: "/",
+        });
+      }
+    } catch {
+      // SESSION_SECRET が未投入の場合。状態を変える操作は verifyCsrfToken 側で
+      // 必ず落ちるので、ここでは画面を出させる。
+      csrfToken = "";
+    }
+
+    try {
+      // 監視用。認証不要・副作用なし・軽い。React Router を通さずに答える。
+      const url = new URL(request.url);
+      if (url.pathname === "/api/health") {
+        return await handleHealthCheck({ env, getDb, logger });
+      }
+
+      // React Router 8 では context が RouterContextProvider になった。
+      // 素のオブジェクトを渡す書き方は使えないので、鍵に値を入れて渡す。
+      const routerContext = new RouterContextProvider();
+      routerContext.set(appContext, {
+        env,
+        ctx,
+        getDb,
+        logger,
+        nonce,
+        requestId,
+        csrfToken,
+      });
+
+      const response = await requestHandler(request, routerContext);
+
+      const secured = applySecurityHeaders(response, env, nonce);
+      if (csrfSetCookie) secured.headers.append("set-cookie", csrfSetCookie);
+      return secured;
+    } catch (error) {
+      logger.error("unhandled request error", error, {
+        path: new URL(request.url).pathname,
+        method: request.method,
+      });
+      // ★スタックトレースを画面に出さない。★
+      return applySecurityHeaders(
+        new Response("Internal Server Error", {
+          status: 500,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+        env,
+        nonce,
+      );
+    } finally {
+      // 応答を返したあとに接続を畳む。ここで await すると応答が遅れる。
+      ctx.waitUntil(dispose());
+    }
+  },
+} satisfies ExportedHandler<Env>;
