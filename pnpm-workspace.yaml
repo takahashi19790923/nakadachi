@@ -11,3 +11,11 @@ minimumReleaseAgeExclude:
   - '@cloudflare/vite-plugin@1.52.0'
   - miniflare@5.20260811.0-alpha
   - wrangler@4.122.0
+
+# drizzle-kit が @esbuild-kit 経由で esbuild 0.18 を引き込む。
+# 0.24.2 以下は開発サーバーが任意サイトからの要求に応答する脆弱性がある
+# （GHSA / Dependabot が検出）。drizzle-kit はここで開発サーバーを立てないので
+# 実害は薄いが、警告を放置すると本当の警告を見なくなるので上書きする。
+# ★上げたあと db:generate が通ることを実際に確かめること。★
+overrides:
+  esbuild: '>=0.25.0'
