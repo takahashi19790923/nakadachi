@@ -8,6 +8,9 @@ on:
   schedule:
     # 依存や規則の更新で新しく見つかることがあるので、週1回は流す。
     - cron: "17 3 * * 1"
+  # ★手動で回せるようにしておく。★ 再実行（rerun）は元のイベントを使うので、
+  # リポジトリの公開設定を変えた直後などは、新しいイベントが要る。
+  workflow_dispatch:
 
 permissions:
   contents: read
