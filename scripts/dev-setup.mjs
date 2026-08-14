@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 
 /**
  * ローカル開発と E2E のための .dev.vars を用意する。
@@ -20,10 +20,13 @@ import { existsSync, writeFileSync } from "node:fs";
 
 const TARGET = ".dev.vars";
 
-if (existsSync(TARGET)) {
-  console.log(`${TARGET} は既にあります。変更しません。`);
-  process.exit(0);
-}
+/*
+ * ★存在確認をここで行わない。★
+ * 「existsSync で見てから書く」は、その2つの操作の間にファイルが
+ * 作られると上書きしてしまう。このスクリプトは「本物の鍵が入っていても
+ * 壊さない」ことを約束しているので、確認と書き込みが別操作であること
+ * 自体が穴になる。判断は下の書き込み1回にまとめてある（flag: "wx"）。
+ */
 
 const key32 = () => randomBytes(32).toString("base64url");
 
@@ -58,12 +61,9 @@ ADMIN_BASIC_AUTH_PASS="${randomBytes(16).toString("base64url")}"
 `;
 
 /*
- * ★"wx" で書く。★ 上の existsSync とこの書き込みの間にファイルが
- * 作られると、素の writeFileSync は黙って上書きする。このスクリプトは
- * 「本物の鍵が入っていても壊さない」ことを約束しているので、
- * 確認と書き込みが別々の操作になっていること自体が穴になる。
- * "wx" は「無ければ作る、あれば失敗する」を1回の操作で行う。
- * （CodeQL の js/file-system-race が指摘した箇所）
+ * ★"wx" は「無ければ作る、あれば失敗する」を1回の操作で行う。★
+ * 存在確認と書き込みを分けると、その隙にファイルが作られたときに
+ * 上書きしてしまう（CodeQL の js/file-system-race）。
  */
 try {
   writeFileSync(TARGET, contents, { encoding: "utf8", flag: "wx" });
