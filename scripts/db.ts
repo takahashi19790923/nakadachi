@@ -24,6 +24,21 @@ const EXPECTED_DATABASE: Readonly<Record<DbTarget, string>> = {
   production: "nakadachi",
 };
 
+/**
+ * 期待する Neon のエンドポイント（ホスト名の先頭）。
+ *
+ * ★データベース名だけでは足りない。★ 本番は 2026-08-14 に専用の Neon
+ * プロジェクトへ移したが、移行元にも同じ名前（nakadachi）のデータベースが
+ * 残っている。名前だけを見る検査では、古いほうを指していても素通りする。
+ * 「本番のつもりで、誰も見ていない古いDBへマイグレーションを流した」は
+ * 気づくのが遅れるほど痛い。ホストまで見る。
+ *
+ * ★エンドポイント名は秘密ではない。★ 接続にはロールとパスワードが要る。
+ */
+const EXPECTED_HOST_PREFIX: Readonly<Partial<Record<DbTarget, string>>> = {
+  production: "ep-lucky-brook-",
+};
+
 const ENV_VARIABLE: Readonly<Record<DbTarget, string>> = {
   dev: "DATABASE_URL_DEV",
   preview: "DATABASE_URL_PREVIEW",
@@ -76,6 +91,16 @@ export function requireConnectionString(target: DbTarget): string {
     throw new Error(
       `${variable} の接続先が「${actual ?? "不明"}」になっています。` +
         `${target} には「${expected}」を指定してください（貼り間違いの可能性があります）。`,
+    );
+  }
+
+  // ★エンドポイントも見る。★ 同名のデータベースが別プロジェクトに残っている。
+  const hostPrefix = EXPECTED_HOST_PREFIX[target];
+  if (hostPrefix && !value.includes(`@${hostPrefix}`)) {
+    throw new Error(
+      `${variable} が想定と違う Neon エンドポイントを指しています` +
+        `（${target} は ${hostPrefix}… のプロジェクト）。` +
+        `分離前の古いデータベースを掴んでいないか確認してください。`,
     );
   }
 
