@@ -1,0 +1,67 @@
+{
+	// ── プロジェクト参照を使わず1ファイルにまとめている理由 ──────────────
+	// 公式テンプレートは cloudflare / node の2プロジェクトに分ける。だが本リポジトリは
+	// scripts/ と test-integration/ が app/db のスキーマを直接 import するため、
+	// 分けると同じファイルが2つの composite プロジェクトに属することになる。
+	// skipLibCheck 前提なら Workers 型と @types/node は共存できるので、
+	// 「全部を1回で検査する」ほうが穴が無く、tsc -b の順序事故も起きない。
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ES2022",
+		"moduleResolution": "bundler",
+		"lib": ["DOM", "DOM.Iterable", "ES2023"],
+		"jsx": "react-jsx",
+		"types": ["node", "vite/client"],
+
+		// ── 厳格さ ──────────────────────────────────────────────────
+		// strict だけでは any の混入と未使用値を止められない。
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"exactOptionalPropertyTypes": false,
+		"forceConsistentCasingInFileNames": true,
+
+		// import type を強制する。クライアント側のファイルがサーバー専用
+		// モジュールを「型のつもり」で値 import して、Prisma/Neon ごと
+		// ブラウザバンドルに引き込む事故を型レベルで止める。
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		// scripts/ と app/db/ は Node が --experimental-strip-types で直接読む。
+		// Node の ESM 解決は拡張子を省略できないので、それらのファイルでは
+		// 相対 import に .ts を明示する。この設定はそれを許すためのもの。
+		"allowImportingTsExtensions": true,
+		"allowJs": false,
+		"checkJs": false,
+		"skipLibCheck": true,
+		"noEmit": true,
+
+		"rootDirs": [".", "./.react-router/types"],
+		"baseUrl": ".",
+		"paths": {
+			"~/*": ["./app/*"]
+		}
+	},
+	"include": [
+		".react-router/types/**/*",
+		"worker-configuration.d.ts",
+		"app/**/*",
+		"workers/**/*",
+		"scripts/**/*",
+		"test/**/*",
+		"test-integration/**/*",
+		"e2e/**/*",
+		"vite.config.ts",
+		"react-router.config.ts",
+		"vitest.config.ts",
+		"vitest.integration.config.ts",
+		"playwright.config.ts",
+		"drizzle.config.ts"
+	],
+	"exclude": ["node_modules", "build", "dist", ".wrangler"]
+}

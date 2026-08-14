@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    # 依存はバージョンを固定しているので、更新は必ず PR として見る。
+    versioning-strategy: increase
+    groups:
+      # 細かい PR が乱立すると誰も見なくなる。まとめる。
+      patch-and-minor:
+        update-types: [minor, patch]
+      react-router:
+        patterns: ["react-router", "@react-router/*"]
+      cloudflare:
+        patterns: ["wrangler", "@cloudflare/*", "miniflare"]
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    # Action はコミット SHA で固定しているため、更新は Dependabot に任せる。
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

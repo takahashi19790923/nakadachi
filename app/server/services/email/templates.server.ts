@@ -1,0 +1,293 @@
+import { SITE } from "~/config/site";
+import { LISTING_FEE_JPY, formatJpy } from "~/domain/pricing";
+
+/**
+ * メール文面。
+ *
+ * ★文面はコード側に組み込みで持つ。★ DB に入れると、DB が空の環境で
+ * 何も送れなくなる。将来オーバーライドが要るなら「DB に行があればそれを使い、
+ * 無ければ組み込みに落ちる」形にする。
+ *
+ * ★利用者の入力を必ずエスケープする。★ 投稿タイトルや表示名がそのまま
+ * HTML に入るので、`<img onerror=...>` のような文字列を書かれると、
+ * 受信側のメールクライアントによっては危険な描画になる。
+ */
+
+/** HTML に埋める前に必ず通す */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export interface EmailContent {
+  readonly subject: string;
+  readonly html: string;
+  readonly text: string;
+}
+
+/**
+ * 共通の外枠。
+ * メールクライアントは CSS の対応がまちまちなので、インラインの style だけを使う。
+ */
+function layout(options: {
+  heading: string;
+  bodyHtml: string;
+  bodyText: string;
+  actionUrl?: string;
+  actionLabel?: string;
+}): { html: string; text: string } {
+  const action = options.actionUrl
+    ? `<p style="margin:24px 0"><a href="${escapeHtml(options.actionUrl)}" style="display:inline-block;background:#2d4b5e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">${escapeHtml(options.actionLabel ?? "開く")}</a></p>`
+    : "";
+
+  const html = `<!doctype html>
+<html lang="ja">
+<body style="margin:0;padding:24px;background:#fcfbf8;font-family:sans-serif;color:#26241e;line-height:1.8">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #ebe7dd;border-radius:12px;padding:24px">
+    <p style="margin:0 0 16px;font-weight:bold;color:#2d4b5e">${escapeHtml(SITE.name)}</p>
+    <h1 style="margin:0 0 16px;font-size:18px">${escapeHtml(options.heading)}</h1>
+    ${options.bodyHtml}
+    ${action}
+    <hr style="border:none;border-top:1px solid #ebe7dd;margin:24px 0">
+    <p style="margin:0;font-size:12px;color:#6d6759">
+      このメールは ${escapeHtml(SITE.name)} から送信されています。<br>
+      お問い合わせ: ${escapeHtml(SITE.supportEmail)}
+    </p>
+  </div>
+</body>
+</html>`;
+
+  const text = [
+    SITE.name,
+    "",
+    options.heading,
+    "",
+    options.bodyText,
+    options.actionUrl ? `\n${options.actionLabel ?? "開く"}: ${options.actionUrl}` : "",
+    "",
+    "----",
+    `お問い合わせ: ${SITE.supportEmail}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return { html, text };
+}
+
+// ── 1. ログインリンク / OTP ────────────────────────────────────────
+
+export function loginCodeEmail(options: {
+  otp: string;
+  linkUrl: string;
+  expiresInMinutes: number;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "ログイン用の確認コード",
+    bodyHtml: `
+      <p style="margin:0 0 12px">下の確認コードを画面に入力してください。</p>
+      <p style="margin:0 0 12px;font-size:28px;letter-spacing:6px;font-weight:bold;font-family:monospace">${escapeHtml(options.otp)}</p>
+      <p style="margin:0 0 12px">リンクを開いてログインすることもできます。</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        有効期限は${options.expiresInMinutes}分です。一度使うと無効になります。<br>
+        心当たりがない場合は、このメールを破棄してください。何も起きません。
+      </p>`,
+    bodyText: [
+      "下の確認コードを画面に入力してください。",
+      "",
+      `確認コード: ${options.otp}`,
+      "",
+      `有効期限は${options.expiresInMinutes}分です。一度使うと無効になります。`,
+      "心当たりがない場合は、このメールを破棄してください。何も起きません。",
+    ].join("\n"),
+    actionUrl: options.linkUrl,
+    actionLabel: "リンクでログインする",
+  });
+
+  return { subject: `【${SITE.name}】ログイン用の確認コード`, html, text };
+}
+
+// ── 2. 掲載完了 ────────────────────────────────────────────────────
+
+export function listingPublishedEmail(options: {
+  title: string;
+  listingUrl: string;
+  expiresAt: string;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "投稿を公開しました",
+    bodyHtml: `
+      <p style="margin:0 0 12px">掲載料 ${formatJpy(LISTING_FEE_JPY)}（税込）のお支払いを確認し、投稿を公開しました。</p>
+      <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
+      <p style="margin:0 0 12px">掲載終了予定日：${escapeHtml(options.expiresAt)}</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        取引が決まったら、マイページから掲載を終了できます。<br>
+        正確な住所や電話番号は投稿に書かないでください。
+      </p>`,
+    bodyText: [
+      `掲載料 ${formatJpy(LISTING_FEE_JPY)}（税込）のお支払いを確認し、投稿を公開しました。`,
+      "",
+      options.title,
+      `掲載終了予定日：${options.expiresAt}`,
+      "",
+      "取引が決まったら、マイページから掲載を終了できます。",
+    ].join("\n"),
+    actionUrl: options.listingUrl,
+    actionLabel: "投稿を見る",
+  });
+
+  return { subject: `【${SITE.name}】投稿を公開しました`, html, text };
+}
+
+// ── 3. 決済失敗 ────────────────────────────────────────────────────
+
+export function paymentFailedEmail(options: {
+  title: string;
+  retryUrl: string;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "お支払いを確認できませんでした",
+    bodyHtml: `
+      <p style="margin:0 0 12px">次の投稿の掲載料をお預かりできませんでした。投稿は下書きとして残っています。</p>
+      <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        カードの有効期限や利用限度額をご確認のうえ、もう一度お試しください。<br>
+        料金が二重に請求されることはありません。
+      </p>`,
+    bodyText: [
+      "次の投稿の掲載料をお預かりできませんでした。投稿は下書きとして残っています。",
+      "",
+      options.title,
+      "",
+      "カードの有効期限や利用限度額をご確認のうえ、もう一度お試しください。",
+      "料金が二重に請求されることはありません。",
+    ].join("\n"),
+    actionUrl: options.retryUrl,
+    actionLabel: "もう一度手続きする",
+  });
+
+  return { subject: `【${SITE.name}】お支払いを確認できませんでした`, html, text };
+}
+
+// ── 4. 新着メッセージ ──────────────────────────────────────────────
+
+export function newMessageEmail(options: {
+  listingTitle: string;
+  threadUrl: string;
+}): EmailContent {
+  // ★本文をメールに載せない。★ 受信箱に会話が溜まると、端末を他人に見られた
+  // ときの被害が大きい。件名にも相手の表示名を出さない。
+  const { html, text } = layout({
+    heading: "新しいメッセージが届いています",
+    bodyHtml: `
+      <p style="margin:0 0 12px">投稿「${escapeHtml(options.listingTitle)}」に新しいメッセージが届きました。</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        メッセージの内容はサイト内でご確認ください。<br>
+        通知が不要な場合は、マイページの設定から止められます。
+      </p>`,
+    bodyText: [
+      `投稿「${options.listingTitle}」に新しいメッセージが届きました。`,
+      "",
+      "メッセージの内容はサイト内でご確認ください。",
+    ].join("\n"),
+    actionUrl: options.threadUrl,
+    actionLabel: "メッセージを見る",
+  });
+
+  return { subject: `【${SITE.name}】新しいメッセージが届いています`, html, text };
+}
+
+// ── 5. 掲載期限の通知 ──────────────────────────────────────────────
+
+export function listingExpiringEmail(options: {
+  title: string;
+  listingUrl: string;
+  daysLeft: number;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "まもなく掲載期間が終わります",
+    bodyHtml: `
+      <p style="margin:0 0 12px">次の投稿は、あと${options.daysLeft}日で掲載期間が終わります。</p>
+      <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        掲載を続けたい場合は、期間終了後にあらためて投稿してください（掲載料 ${formatJpy(LISTING_FEE_JPY)} がかかります）。<br>
+        自動で更新・課金されることはありません。
+      </p>`,
+    bodyText: [
+      `次の投稿は、あと${options.daysLeft}日で掲載期間が終わります。`,
+      "",
+      options.title,
+      "",
+      `掲載を続けたい場合は、期間終了後にあらためて投稿してください（掲載料 ${formatJpy(LISTING_FEE_JPY)} がかかります）。`,
+      "自動で更新・課金されることはありません。",
+    ].join("\n"),
+    actionUrl: options.listingUrl,
+    actionLabel: "投稿を見る",
+  });
+
+  return { subject: `【${SITE.name}】まもなく掲載期間が終わります`, html, text };
+}
+
+// ── 6. 管理者による非公開 ──────────────────────────────────────────
+
+export function listingSuspendedEmail(options: {
+  title: string;
+  reason: string;
+  contactUrl: string;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "投稿を非公開にしました",
+    bodyHtml: `
+      <p style="margin:0 0 12px">次の投稿を、利用規約に照らして非公開にしました。</p>
+      <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
+      <p style="margin:0 0 12px">理由：${escapeHtml(options.reason)}</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        お心当たりがない場合や、内容についてご説明がある場合は、お問い合わせからご連絡ください。<br>
+        掲載料の返金については、お問い合わせのうえ個別に対応します。
+      </p>`,
+    bodyText: [
+      "次の投稿を、利用規約に照らして非公開にしました。",
+      "",
+      options.title,
+      `理由：${options.reason}`,
+      "",
+      "お心当たりがない場合は、お問い合わせからご連絡ください。",
+    ].join("\n"),
+    actionUrl: options.contactUrl,
+    actionLabel: "お問い合わせ",
+  });
+
+  return { subject: `【${SITE.name}】投稿を非公開にしました`, html, text };
+}
+
+// ── 7. アカウント削除の確認 ────────────────────────────────────────
+
+export function accountDeletionEmail(options: {
+  purgeDate: string;
+  cancelUrl: string;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "退会のお申し込みを受け付けました",
+    bodyHtml: `
+      <p style="margin:0 0 12px">${escapeHtml(options.purgeDate)}に、アカウントと投稿・メッセージを削除します。</p>
+      <p style="margin:0 0 12px">それまではログインでき、下のリンクから取り消せます。</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        法令で保存が求められる決済の記録は、個人が特定できない形にしたうえで保管します。<br>
+        削除後の復旧はできません。
+      </p>`,
+    bodyText: [
+      `${options.purgeDate}に、アカウントと投稿・メッセージを削除します。`,
+      "それまではログインでき、下のリンクから取り消せます。",
+      "",
+      "法令で保存が求められる決済の記録は、個人が特定できない形にしたうえで保管します。",
+      "削除後の復旧はできません。",
+    ].join("\n"),
+    actionUrl: options.cancelUrl,
+    actionLabel: "退会を取り消す",
+  });
+
+  return { subject: `【${SITE.name}】退会のお申し込みを受け付けました`, html, text };
+}

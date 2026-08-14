@@ -1,0 +1,45 @@
+# ── 秘密情報（絶対にコミットしない）─────────────────────────────
+# 1行でも漏れると、その値はローテーションするまで漏れたままになる。
+# ブロックリストなので「除外し忘れ＝即コミット」。新しい秘密ファイルを
+# 作るときは、まずここに足してから中身を書くこと。
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.pem
+*.key
+secret.txt
+secrets/
+*.dump
+*.sql.gz
+db-backup/
+
+# ── 依存とビルド成果物 ──────────────────────────────────────────
+node_modules/
+build/
+dist/
+.react-router/
+.wrangler/
+worker-configuration.d.ts
+*.tsbuildinfo
+
+# ── テスト成果物 ────────────────────────────────────────────────
+test-results/
+playwright-report/
+blob-report/
+coverage/
+.pglite/
+
+# ── エディタ・OS ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── ログ ────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+pnpm-debug.log*

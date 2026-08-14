@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+/*
+ * なかだち の見た目。
+ *
+ * ★Web フォントを読み込まない。★ CJK のフォントは数MBあり、<link> ひとつで
+ * 描画が1秒以上止まる。端末に載っている日本語フォントで十分読める。
+ *
+ * 配色は「落ち着き・安心感」を狙った独自のもの。藍色を主色に、
+ * 差し色は温かみのある橙。彩度を抑えて、広告的な華やかさを避けている。
+ */
+@theme {
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", Meiryo, sans-serif;
+
+  /* 主色：藍。信頼と静けさ */
+  --color-ai-50: #f2f6f8;
+  --color-ai-100: #dfe9ef;
+  --color-ai-200: #c0d4de;
+  --color-ai-300: #93b5c6;
+  --color-ai-400: #5e8ea6;
+  --color-ai-500: #3f728b;
+  --color-ai-600: #345c73;
+  --color-ai-700: #2d4b5e;
+  --color-ai-800: #294050;
+  --color-ai-900: #263745;
+  --color-ai-950: #16232d;
+
+  /* 差し色：柿。行動を促す箇所だけに使う */
+  --color-kaki-50: #fdf5ef;
+  --color-kaki-100: #fae8d9;
+  --color-kaki-200: #f4cdb1;
+  --color-kaki-300: #ecab80;
+  --color-kaki-400: #e2814e;
+  --color-kaki-500: #d9642d;
+  --color-kaki-600: #ca4d22;
+  --color-kaki-700: #a83b1e;
+  --color-kaki-800: #86311f;
+  --color-kaki-900: #6d2b1c;
+
+  /* 地色：わずかに温かい白。真っ白より目が疲れにくい */
+  --color-washi-50: #fcfbf8;
+  --color-washi-100: #f6f4ee;
+  --color-washi-200: #ebe7dd;
+  --color-washi-300: #d9d3c5;
+  --color-washi-400: #b3ab98;
+  --color-washi-500: #8d8574;
+  --color-washi-600: #6d6759;
+  --color-washi-700: #545044;
+  --color-washi-800: #3b382f;
+  --color-washi-900: #26241e;
+}
+
+@layer base {
+  html {
+    /* 長いページで遠いアンカーへ飛べなくなるため smooth にしない */
+    scroll-behavior: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-washi-50);
+    color: var(--color-washi-900);
+    font-family: var(--font-sans);
+    /* 日本語は行間を広めに取ると読みやすい */
+    line-height: 1.8;
+  }
+
+  /* キーボード操作で「今どこにいるか」が必ず見えるようにする。
+     outline を消すだけの CSS を書かないこと。 */
+  :focus-visible {
+    outline: 3px solid var(--color-kaki-500);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* 動きに敏感な利用者向け */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* 本文中のリンク。下線を消さない（色だけで区別させない） */
+  .link {
+    @apply text-ai-700 underline underline-offset-2 hover:text-ai-900;
+  }
+
+  /*
+   * ボタンは「btn」と色の指定を並べて使う（class="btn btn-primary"）。
+   * Tailwind v4 では @apply で同じ layer の自作クラスを参照できないため、
+   * 継承ではなく組み合わせにしている。
+   * min-h-11 は指で押せる大きさ（44px）の確保。
+   */
+  .btn {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2
+      rounded-lg px-5 py-2.5 text-base font-semibold transition-colors
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-ai-700 text-white hover:bg-ai-800;
+  }
+  .btn-accent {
+    @apply bg-kaki-600 text-white hover:bg-kaki-700;
+  }
+  .btn-secondary {
+    @apply border border-washi-300 bg-white text-washi-800 hover:bg-washi-100;
+  }
+  .btn-danger {
+    @apply border border-red-300 bg-white text-red-800 hover:bg-red-50;
+  }
+  .btn-sm {
+    @apply min-h-10 px-3 py-2 text-sm;
+  }
+
+  .field-label {
+    @apply block text-sm font-semibold text-washi-800;
+  }
+  .field-input {
+    @apply mt-1 block w-full rounded-lg border border-washi-300 bg-white px-3 py-2.5
+      text-base text-washi-900 placeholder:text-washi-400
+      focus:border-ai-500 focus:ring-2 focus:ring-ai-200;
+  }
+  .field-hint {
+    @apply mt-1 text-sm text-washi-600;
+  }
+  .field-error {
+    @apply mt-1 text-sm font-medium text-red-700;
+  }
+
+  .card {
+    @apply rounded-xl border border-washi-200 bg-white;
+  }
+}

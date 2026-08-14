@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────
+# ローカルの Workers ランタイムが読む秘密情報。
+#
+#   cp .dev.vars.example .dev.vars
+#
+# wrangler が wrangler.jsonc の vars の「上に」重ねる。アプリ側のコードを
+# dev と本番で分岐させないための仕組みなので、ローカル固有の値は必ず
+# こちらへ書く（コードに if (dev) を書かない）。
+#
+# ★本物の値を書かないこと。★ .dev.vars は .gitignore 済み。
+# ダミーは本物と見間違えない形にしてある。
+# ─────────────────────────────────────────────────────────────────
+
+# Neon 接続文字列（アプリが実行時に使う）
+DATABASE_URL="postgresql://REPLACE_ME_USER:REPLACE_ME_PASSWORD@REPLACE-ME-ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/nakadachi?sslmode=require"
+
+# セッション・CSRF トークンの署名鍵。32バイト以上のランダム文字列。
+#   node -e "console.log(crypto.randomBytes(48).toString('base64url'))"
+SESSION_SECRET="REPLACE_ME_generate_48_random_bytes_base64url"
+
+# メールアドレスの暗号化鍵と検索索引用 HMAC 鍵。別々の値にすること。
+# どちらも base64url で 32バイト。
+EMAIL_ENCRYPTION_KEY="REPLACE_ME_32_bytes_base64url_for_aes_gcm"
+EMAIL_INDEX_KEY="REPLACE_ME_32_bytes_base64url_for_hmac_index"
+
+# Resend。ローカルでは未設定のままにすると、メールを送らず
+# 内容をサーバーログへ出す（宛先はマスクされる）。
+# RESEND_API_KEY="re_REPLACE_ME_not_a_real_key"
+
+# Stripe テストモードの鍵。★本番モードの鍵をここへ置かないこと★
+STRIPE_SECRET_KEY="sk_test_REPLACE_ME_not_a_real_key"
+STRIPE_WEBHOOK_SECRET="whsec_REPLACE_ME_not_a_real_secret"
+
+# Turnstile。ローカルは Cloudflare のテスト用シークレット（常に成功）。
+# 実鍵をローカルへ置く必要はない。
+TURNSTILE_SECRET_KEY="1x0000000000000000000000000000000AA"
+
+# 管理画面の第3層。全プロジェクト共通の値を使う（新規に発行しない）。
+ADMIN_BASIC_AUTH_USER="REPLACE_ME_shared_admin_user"
+ADMIN_BASIC_AUTH_PASS="REPLACE_ME_shared_admin_password"

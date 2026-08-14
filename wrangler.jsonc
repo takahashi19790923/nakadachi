@@ -1,0 +1,114 @@
+/**
+ * Cloudflare Workers 設定。
+ *
+ * ここに書いてよいのは「公開されても困らない値」だけ。接続文字列・APIキー・
+ * 署名鍵は必ず `wrangler secret put` で入れる（DEPLOYMENT.md の手順を参照）。
+ *
+ * ★ env ごとに vars を丸ごと書いている理由 ★
+ * wrangler の named environment は vars を継承しない。トップレベルにだけ書くと
+ * `--env production` で vars が空になり、APP_ORIGIN が undefined のまま動く。
+ * 継承を期待して片方だけ書くと、Origin 検証と Turnstile の hostname 照合が
+ * まとめて壊れるので、重複を承知で全部書く。
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "nakadachi",
+	"main": "./workers/app.ts",
+	"compatibility_date": "2026-08-13",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+
+	// ── ローカル開発（wrangler dev / vite dev）─────────────────────────
+	// 値の上書きは .dev.vars で行う。アプリのコードを dev と本番で分岐させない。
+	"vars": {
+		"ENVIRONMENT": "development",
+		"APP_ORIGIN": "http://localhost:5273",
+		"SESSION_COOKIE_NAME": "nakadachi_session",
+		"MAIL_FROM": "なかだち <notice@rewrite-co.com>",
+		"EMAIL_REPLY_TO": "support@rewrite-co.com",
+		"EXPECTED_CURRENCY": "jpy",
+		// ローカルは Cloudflare のテスト用サイトキー（常に成功）。
+		// 共有ウィジェットのホスト名に localhost は入っていない。
+		"TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+		"TURNSTILE_EXPECTED_HOSTS": "localhost",
+		"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+	},
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "nakadachi-media-dev",
+			"preview_bucket_name": "nakadachi-media-dev"
+		}
+	],
+
+	"env": {
+		// ── preview ────────────────────────────────────────────────────
+		// Stripe / Resend / Neon / R2 をすべて production と別系統にする。
+		"preview": {
+			"vars": {
+				"ENVIRONMENT": "preview",
+				"APP_ORIGIN": "https://nakadachi-preview.rewrite-co.com",
+				"SESSION_COOKIE_NAME": "__Host-nakadachi_session",
+				"MAIL_FROM": "なかだち(preview) <notice@rewrite-co.com>",
+				"EMAIL_REPLY_TO": "support@rewrite-co.com",
+				"EXPECTED_CURRENCY": "jpy",
+				"TURNSTILE_SITE_KEY": "0x4AAAAAAELgQFNdxUExXAXc",
+				"TURNSTILE_EXPECTED_HOSTS": "nakadachi-preview.rewrite-co.com",
+				"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+			},
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "nakadachi-media-preview"
+				}
+			],
+			"routes": [
+				{
+					"pattern": "nakadachi-preview.rewrite-co.com",
+					"custom_domain": true
+				}
+			],
+			// ★workers.dev を明示的に閉じる。★
+			// 開いていると同じ内容が *.workers.dev でも見え、こちらは
+			// TURNSTILE_EXPECTED_HOSTS に一致しないので認証だけが壊れる。
+			// 「サイトは見えるのにログインできないURL」が1つ増える形になる。
+			// 既定でも routes があれば閉じるが、既定に頼らず書いておく。
+			"workers_dev": false
+		},
+
+		// ── production ─────────────────────────────────────────────────
+		"production": {
+			"vars": {
+				"ENVIRONMENT": "production",
+				"APP_ORIGIN": "https://nakadachi.rewrite-co.com",
+				"SESSION_COOKIE_NAME": "__Host-nakadachi_session",
+				"MAIL_FROM": "なかだち <notice@rewrite-co.com>",
+				"EMAIL_REPLY_TO": "support@rewrite-co.com",
+				"EXPECTED_CURRENCY": "jpy",
+				// 共有ウィジェット rewrite-co-common。新規に作らない（Free 上限20）。
+				"TURNSTILE_SITE_KEY": "0x4AAAAAAELgQFNdxUExXAXc",
+				// ★完全一致で照合する。1つの鍵を全サービスで共有しているため、
+				//   ここが空だと他サービス向けに解かれたトークンがそのまま通る。
+				"TURNSTILE_EXPECTED_HOSTS": "nakadachi.rewrite-co.com",
+				"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+			},
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "nakadachi-media"
+				}
+			],
+			"routes": [
+				{
+					"pattern": "nakadachi.rewrite-co.com",
+					"custom_domain": true
+				}
+			],
+			// preview と同じ理由で明示的に閉じる。
+			"workers_dev": false
+		}
+	}
+}

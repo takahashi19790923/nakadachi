@@ -1,0 +1,11 @@
+build
+dist
+.react-router
+.wrangler
+node_modules
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+app/db/migrations
+worker-configuration.d.ts
