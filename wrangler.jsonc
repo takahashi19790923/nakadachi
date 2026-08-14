@@ -33,8 +33,7 @@
 		// ローカルは Cloudflare のテスト用サイトキー（常に成功）。
 		// 共有ウィジェットのホスト名に localhost は入っていない。
 		"TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
-		"TURNSTILE_EXPECTED_HOSTS": "localhost",
-		"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+		"TURNSTILE_EXPECTED_HOSTS": "localhost"
 	},
 	"r2_buckets": [
 		{
@@ -56,8 +55,7 @@
 				"EMAIL_REPLY_TO": "support@rewrite-co.com",
 				"EXPECTED_CURRENCY": "jpy",
 				"TURNSTILE_SITE_KEY": "0x4AAAAAAELgQFNdxUExXAXc",
-				"TURNSTILE_EXPECTED_HOSTS": "nakadachi-preview.rewrite-co.com",
-				"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+				"TURNSTILE_EXPECTED_HOSTS": "nakadachi-preview.rewrite-co.com"
 			},
 			"r2_buckets": [
 				{
@@ -92,8 +90,7 @@
 				"TURNSTILE_SITE_KEY": "0x4AAAAAAELgQFNdxUExXAXc",
 				// ★完全一致で照合する。1つの鍵を全サービスで共有しているため、
 				//   ここが空だと他サービス向けに解かれたトークンがそのまま通る。
-				"TURNSTILE_EXPECTED_HOSTS": "nakadachi.rewrite-co.com",
-				"ADMIN_NOTIFY_EMAIL": "運営者本人のアドレス"
+				"TURNSTILE_EXPECTED_HOSTS": "nakadachi.rewrite-co.com"
 			},
 			"r2_buckets": [
 				{

@@ -255,7 +255,7 @@ node scripts/check-secrets.mjs --install # git の pre-commit フックとして
 pnpm run admin:create preview     # 接続先を明示する。省略すると dev
 ```
 
-対話でメールアドレスを聞かれます（`運営者本人のアドレス`）。
+対話でメールアドレスを聞かれます（運営者本人のアドレス）。
 **引数で渡さないでください。** PowerShell の履歴に残ります。
 
 `.env` の `EMAIL_ENCRYPTION_KEY` / `EMAIL_INDEX_KEY` は、

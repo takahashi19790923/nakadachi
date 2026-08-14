@@ -23,7 +23,6 @@ export interface AppEnv {
   EXPECTED_CURRENCY: string;
   TURNSTILE_SITE_KEY: string;
   TURNSTILE_EXPECTED_HOSTS: string;
-  ADMIN_NOTIFY_EMAIL: string;
 
   // ── secret（wrangler secret put / .dev.vars）─────────────────
   DATABASE_URL?: string;

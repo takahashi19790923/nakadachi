@@ -395,7 +395,7 @@ draft ──(本人が決済へ)──> payment_pending ──(Webhook: 支払�
 | 5 | **このサービス専用の Stripe アカウント**作成、テストモードでの商品・Webhook 登録 | 事業者としての契約 |
 | 6 | Resend の送信ドメイン認証（SPF / DKIM / DMARC） | DNS の変更 |
 | 7 | Secrets 10項目の投入（`wrangler secret put`） | 値を私に渡さないこと |
-| 8 | 初期管理者（`運営者本人のアドレス`）の作成 | `scripts/create-admin.ts` の手順あり |
+| 8 | 初期管理者の作成 | `scripts/create-admin.ts` の手順あり |
 | 9 | GitHub の Secret Scanning / Push Protection の有効化 | リポジトリ設定 |
 | 10 | `rewrite-uptime/src/targets.js` への監視対象追加 | 別リポジトリ |
 | 11 | `rewrite-co.com` トップページへのカード追加 | 別リポジトリ |

@@ -62,7 +62,6 @@ export function testEnv(): AppEnv {
     EXPECTED_CURRENCY: "jpy",
     TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
     TURNSTILE_EXPECTED_HOSTS: "localhost",
-    ADMIN_NOTIFY_EMAIL: "admin@example.test",
     DATABASE_URL: process.env.TEST_DATABASE_URL,
     SESSION_SECRET: "test-session-secret-not-a-real-value-0123456789",
     EMAIL_ENCRYPTION_KEY: toBase64Url(new Uint8Array(32).fill(7)),

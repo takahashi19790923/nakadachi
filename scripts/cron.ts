@@ -53,7 +53,6 @@ function scriptEnv(databaseUrl: string): AppEnv {
     EXPECTED_CURRENCY: "jpy",
     TURNSTILE_SITE_KEY: "",
     TURNSTILE_EXPECTED_HOSTS: "",
-    ADMIN_NOTIFY_EMAIL: process.env.ADMIN_NOTIFY_EMAIL ?? "",
     DATABASE_URL: databaseUrl,
     SESSION_SECRET: process.env.SESSION_SECRET,
     EMAIL_ENCRYPTION_KEY: process.env.EMAIL_ENCRYPTION_KEY,
