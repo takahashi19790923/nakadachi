@@ -32,8 +32,18 @@
 
 - **メールアドレスは平文で保存しません。** AES-GCM の暗号文と、別鍵の HMAC の2本立て。
   検索と一意制約は HMAC 側で行います。
-- **IP アドレスは保存しません。** 鍵付きハッシュだけを持ちます
-  （IPv4 は43億通りしかなく、鍵なしのハッシュは総当たりで戻せるため）。
+- **IP アドレスは、用途で扱いを分けています。**
+  - セッション・確認トークン・監査ログは**鍵付きハッシュだけ**。元に戻せません
+    （IPv4 は43億通りしかなく、鍵なしのハッシュは総当たりで戻せるため）。
+  - **`access_records` だけは AES-GCM の暗号文**で、復号できます。
+    会員登録・ログイン・掲載の申し込み・メッセージ送信・通報の5つが対象です。
+    **鍵（`ACCESS_LOG_KEY`）はセッション・メールとは別**にしています。
+  - **6か月で自動削除**します（`pnpm run cron purge-access`）。
+    プライバシーポリシーの記載と一致させること。
+
+  > 詐欺の被害者からの発信者情報開示請求（情報流通プラットフォーム対処法）や
+  > 捜査関係事項照会で求められるのは**IPそのもの**です。ハッシュしか持たないと
+  > 「ポリシーには開示すると書いてあるのに出せるものが無い」になります。
 - **`audit_logs` は `users` への外部キーを張っていません。** 張ると退会時に
   「消したという記録」まで消えます。
 - **退会削除は `user_id` と `email_hmac` の両方で辿ります。** 片方だけだと
@@ -67,17 +77,40 @@ nonce は React コンテキスト（`app/nonce.ts`）で運んでいます。
 
 Neon での作り方：
 
+> **★Neon のロールはプロジェクト全体で共有されます。★ データベース単位ではありません。**
+> 1つの `nakadachi_app` を preview と本番の両方で使うと、preview 側の資格情報が
+> 漏れたときに本番のデータベースへそのまま繋がります。**環境ごとに別のロール**
+> （`nakadachi_app_preview` / `nakadachi_app_production`）にしてください。
+>
+> さらに **PUBLIC から `CONNECT` を剥がす**必要があります。PostgreSQL は既定で
+> PUBLIC に CONNECT を与えるので、ロールを分けただけでは越境できます。
+
+> **実測（2026-08-14）── pooled 経由ではデータベース単位の権限が効きません。**
+>
+> | 経路 | 越境しようとした結果 |
+> |---|---|
+> | 直接接続（`-pooler` なし） | `permission denied for database "nakadachi"` |
+> | **pooled（`-pooler` あり）** | **接続は通る。** ただし `permission denied for table locations` |
+>
+> つまり **データは読めませんが、接続そのものは張れます**（システムカタログ
+> 経由で表名などは見えます）。アプリは pooled を使うので、この状態が既定です。
+> 完全に分けるなら Neon のプロジェクトごと分けてください。
+> **表の権限が最後の砦なので、`GRANT ... ON ALL TABLES` を環境ごとに正しく
+> 与えることが必須です。**
+
 ```sql
--- アプリ用ロール（DDL を与えない）
-CREATE ROLE nakadachi_app WITH LOGIN PASSWORD '<vault で管理>';
-GRANT CONNECT ON DATABASE nakadachi TO nakadachi_app;
-GRANT USAGE ON SCHEMA public TO nakadachi_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nakadachi_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nakadachi_app;
+-- アプリ用ロール（DDL を与えない）。★環境ごとに別の名前にする★
+CREATE ROLE nakadachi_app_production WITH LOGIN PASSWORD '<vault で管理>';
+-- ★既定で誰でも繋げるのを閉じる★
+REVOKE CONNECT ON DATABASE nakadachi FROM PUBLIC;
+GRANT CONNECT ON DATABASE nakadachi TO nakadachi_app_production;
+GRANT USAGE ON SCHEMA public TO nakadachi_app_production;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nakadachi_app_production;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nakadachi_app_production;
 
 -- 今後作られる表にも同じ権限を既定で付ける
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nakadachi_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nakadachi_app_production;
 ```
 
 **`DATABASE_URL`（Workers の Secret）にはアプリ用ロールを入れます。**

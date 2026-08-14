@@ -33,7 +33,6 @@
     "deploy:production": "pnpm run build:production && pnpm run check:build-secrets && wrangler deploy",
     "cron": "node --experimental-strip-types scripts/cron.ts",
     "admin:create": "node --experimental-strip-types scripts/create-admin.ts",
-    "og:image": "node scripts/make-og-image.mjs",
     "cf-typegen": "wrangler types",
     "postinstall": "wrangler types"
   },

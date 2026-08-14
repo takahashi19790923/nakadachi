@@ -34,5 +34,11 @@ export const SITE = {
   },
 } as const;
 
-/** OGP・構造化データで使う既定の共有画像（public/ に置く） */
-export const DEFAULT_OG_IMAGE_PATH = "/og-default.png";
+/**
+ * OGP・構造化データで使う既定の共有画像（public/ に置く）。
+ *
+ * 1200×630。★JPEG にしてある。★ 同じ絵の PNG は 840KB あった。
+ * この画像はリンクを展開するクローラーやチャットの類が毎回取りに来るので、
+ * 重いと展開が遅れるか、諦められて何も出ない。
+ */
+export const DEFAULT_OG_IMAGE_PATH = "/og-default.jpg";
