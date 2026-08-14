@@ -21,6 +21,7 @@ import { requireUser } from "~/server/guards.server";
 import { enforceRateLimit } from "~/server/rate-limit.server";
 import { getPublishedListing } from "~/server/repositories/listing-repository.server";
 import { createReport } from "~/server/repositories/moderation-repository.server";
+import { recordAccess } from "~/server/services/access-record-service.server";
 import type { Route } from "./+types/listings.report";
 import { getApp } from "~/server/app-context";
 
@@ -68,6 +69,17 @@ export async function action({ request, context: rawContext, params }: Route.Act
       target: { type: "listing", id: params.listingId },
       reason: parsed.data.reason,
       detail: parsed.data.detail,
+    });
+
+    await recordAccess({
+      db,
+      env: context.env,
+      logger: context.logger,
+      request,
+      action: "report_submitted",
+      userId: user.id,
+      targetType: "listing",
+      targetId: params.listingId,
     });
 
     return redirect("/mypage/reports?submitted=1");

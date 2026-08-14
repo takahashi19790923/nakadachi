@@ -180,6 +180,7 @@ async function seedBannedWords(db: Db): Promise<number> {
 export async function truncateAll(db: Db): Promise<void> {
   await db.execute(sql`
     truncate table
+      access_records,
       audit_logs, admin_actions, email_delivery_logs, rate_limits,
       payment_webhook_events, payments,
       reports, blocks, messages, conversation_participants, conversation_threads,
