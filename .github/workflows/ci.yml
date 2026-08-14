@@ -40,6 +40,12 @@ jobs:
       - name: 依存を導入（lockfile どおり）
         run: pnpm install --frozen-lockfile
 
+      # ★lint より先に型を生成する。★ ルートの型（./+types/*）は
+      # react-router typegen が作る。手元には前回のビルドの残りがあるので
+      # 気づかないが、まっさらな CI では型が解決できず lint が落ちる。
+      - name: 型を生成
+        run: pnpm exec react-router typegen
+
       - name: lint
         run: pnpm run lint
 
@@ -60,7 +66,27 @@ jobs:
   e2e:
     name: E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+
+    # ★DB を与える。★ 無いと、投稿一覧・詳細・地域ページが
+    # ConfigurationError で 503 になり、404 を確かめる検査が落ちる。
+    # 「DB を使わない画面だけ緑」では、壊れても気づけない。
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nakadachi_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL_DEV: postgresql://postgres:postgres@localhost:5432/nakadachi_ci
 
     steps:
       - name: リポジトリを取得
@@ -78,8 +104,24 @@ jobs:
       - name: 依存を導入
         run: pnpm install --frozen-lockfile
 
+      - name: 型を生成
+        run: pnpm exec react-router typegen
+
       - name: ブラウザを用意
         run: pnpm exec playwright install --with-deps chromium
+
+      # マイグレーションと初期データ。pg_trgm も 0000 で入る。
+      - name: DB を用意
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      # ★.dev.vars はビルド時に build/server/ へコピーされる。★
+      # ビルドより前に書いておかないと、preview サーバーが DB 無しで起動する。
+      - name: アプリへ接続先を渡す
+        run: |
+          node scripts/dev-setup.mjs
+          echo "DATABASE_URL=\"$DATABASE_URL_DEV\"" >> .dev.vars
 
       # ★本番ビルドに対して実行する。★ 開発サーバーだと Vite が
       # HMR 用のインラインスクリプトを差し込み、CSP 違反が必ず出るため

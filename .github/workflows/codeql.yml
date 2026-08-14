@@ -15,6 +15,10 @@ permissions:
 jobs:
   analyze:
     name: 解析
+    # ★private リポジトリでは Code Scanning に GitHub Advanced Security が要る。★
+    # 無い状態で動かすと結果の送信で必ず失敗し、毎回赤くなる。
+    # 赤が常態化すると、本当の失敗を誰も見なくなる。公開にすれば自動で有効。
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
