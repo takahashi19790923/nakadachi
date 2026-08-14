@@ -19,6 +19,7 @@ import {
 } from "~/server/services/message-service.server";
 import { notifyNewMessage } from "~/server/services/notification-service.server";
 import type { Route } from "./+types/mypage.messages.thread";
+import { recordAccess } from "~/server/services/access-record-service.server";
 import { getApp } from "~/server/app-context";
 
 export async function loader({ request, context: rawContext, params }: Route.LoaderArgs) {
@@ -81,6 +82,17 @@ export async function action({ request, context: rawContext, params }: Route.Act
       threadId: params.threadId,
       senderId: user.id,
       body: parsed.data.body,
+    });
+
+    await recordAccess({
+      db,
+      env: context.env,
+      logger: context.logger,
+      request,
+      action: "message_sent",
+      userId: user.id,
+      targetType: "thread",
+      targetId: params.threadId,
     });
 
     // 通知は応答を待たせない。失敗しても送信自体は成立している。

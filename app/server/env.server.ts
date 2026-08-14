@@ -30,6 +30,12 @@ export interface AppEnv {
   SESSION_SECRET?: string;
   EMAIL_ENCRYPTION_KEY?: string;
   EMAIL_INDEX_KEY?: string;
+  /*
+   * 発信者情報（IP）の暗号化鍵。
+   * ★セッションやメールの鍵と分ける。★ 1つ漏れたときに、
+   * 「誰がどこから」まで一緒に漏れるのを避けるため。
+   */
+  ACCESS_LOG_KEY?: string;
   RESEND_API_KEY?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
@@ -84,6 +90,7 @@ export type RequiredSecretKey =
   | "SESSION_SECRET"
   | "EMAIL_ENCRYPTION_KEY"
   | "EMAIL_INDEX_KEY"
+  | "ACCESS_LOG_KEY"
   | "RESEND_API_KEY"
   | "STRIPE_SECRET_KEY"
   | "STRIPE_WEBHOOK_SECRET"

@@ -6,6 +6,7 @@
  * マイグレーションに現れず、型は通るのに本番で "relation does not exist" になる。
  */
 export * from "./_shared.ts";
+export * from "./access-records.ts";
 export * from "./enums.ts";
 export * from "./listings.ts";
 export * from "./messaging.ts";

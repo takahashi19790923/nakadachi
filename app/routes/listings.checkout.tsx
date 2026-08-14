@@ -7,6 +7,7 @@ import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf
 import { notFound, toPublicError } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
 import { enforceRateLimit } from "~/server/rate-limit.server";
+import { recordAccess } from "~/server/services/access-record-service.server";
 import { startListingCheckout } from "~/server/services/payment/payment-service.server";
 import type { Route } from "./+types/listings.checkout";
 import { getApp } from "~/server/app-context";
@@ -49,6 +50,24 @@ export async function action({ request, context: rawContext, params }: Route.Act
       listingId: params.listingId,
       userId: user.id,
       durationDays,
+    });
+
+    /*
+     * ★発信者情報はここで記録する。★
+     * 実際に公開されるのは Stripe の Webhook を受けたときだが、あの経路の
+     * 接続元は Stripe であって投稿者ではない。あそこで記録すると
+     * 「全部の投稿が Stripe のIPから行われた」という無意味な記録になる。
+     * 掲載を出す意思を示したこの瞬間が、投稿者本人の接続である。
+     */
+    await recordAccess({
+      db: context.getDb(),
+      env: context.env,
+      logger: context.logger,
+      request,
+      action: "listing_published",
+      userId: user.id,
+      targetType: "listing",
+      targetId: params.listingId,
     });
 
     // Stripe の決済画面へ。ここでは何も公開しない。

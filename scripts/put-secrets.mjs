@@ -50,6 +50,12 @@ const SECRETS = [
     shape: "base64url の43文字（32バイト）",
   },
   {
+    name: "ACCESS_LOG_KEY",
+    hint: "発信者情報(IP)の暗号化鍵。32バイト base64url。上の2つとは別の値",
+    pattern: /^[A-Za-z0-9_-]{43}$/,
+    shape: "base64url の43文字（32バイト）",
+  },
+  {
     name: "RESEND_API_KEY",
     hint: "Resend の API キー",
     pattern: /^re_[A-Za-z0-9_-]{20,}$/,

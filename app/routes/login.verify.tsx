@@ -14,6 +14,7 @@ import { toPublicError } from "~/server/errors";
 import { maskEmail } from "~/server/logger.server";
 import { createSession } from "~/server/session.server";
 import { verifyLoginOtp } from "~/server/services/auth-service.server";
+import { recordAccess } from "~/server/services/access-record-service.server";
 import { LOGIN_EMAIL_COOKIE } from "./login";
 import type { Route } from "./+types/login.verify";
 import { getApp } from "~/server/app-context";
@@ -60,7 +61,7 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       return { fields: toFieldErrors(parsed.error), message: null };
     }
 
-    const { user } = await verifyLoginOtp({
+    const { user, isNewUser } = await verifyLoginOtp({
       db: context.getDb(),
       env: context.env,
       logger: context.logger,
@@ -75,6 +76,15 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       env: context.env,
       userId: user.id,
       request,
+    });
+
+    await recordAccess({
+      db: context.getDb(),
+      env: context.env,
+      logger: context.logger,
+      request,
+      action: isNewUser ? "signup" : "login",
+      userId: user.id,
     });
 
     const next = safeRedirectPath(formData.get("next"), "/mypage");

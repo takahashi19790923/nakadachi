@@ -38,6 +38,10 @@ SESSION_SECRET="${randomBytes(48).toString("base64url")}"
 EMAIL_ENCRYPTION_KEY="${key32()}"
 EMAIL_INDEX_KEY="${key32()}"
 
+# 発信者情報(IP)の暗号化鍵。★上の2つとは別の値にする。★
+# 1つ漏れたときに「誰がどこから」まで一緒に漏れるのを避けるため。
+ACCESS_LOG_KEY="${key32()}"
+
 # Cloudflare が公開しているテスト用の鍵（常に成功する）。
 # ★サイトキーとシークレットは必ず対で使う。★ 片方だけ本番の共有鍵にすると
 # siteverify が常に失敗し、画面には「確認に失敗しました」としか出ない。

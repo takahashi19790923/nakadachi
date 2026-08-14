@@ -3,6 +3,7 @@ import "dotenv/config";
 import { nullLogger } from "../app/server/logger.server.ts";
 import { purgeExpiredRateLimits } from "../app/server/rate-limit.server.ts";
 import { purgeExpiredSessions } from "../app/server/session.server.ts";
+import { purgeExpiredAccessRecords } from "../app/server/services/access-record-service.server.ts";
 import { purgeExpiredTokens } from "../app/server/services/auth-service.server.ts";
 import { purgeDueAccounts } from "../app/server/services/erasure-service.server.ts";
 import { expireDueListings } from "../app/server/services/listing-service.server.ts";
@@ -29,6 +30,7 @@ import {
  *   purge-accounts    ★30日を過ぎた退会依頼を実際に実行する★
  *   purge-media       猶予を過ぎた画像を R2 から消す（Workers 側で実行）
  *   cleanup           期限切れのセッション・トークン・レート制限を掃除する
+ *   purge-access      ★保存期間(6か月)を過ぎた発信者情報を消す★
  *   all               purge-media 以外をすべて
  *
  * ★purge-accounts をテストで実際に動かすこと。★「対象なし」を返す
@@ -80,6 +82,13 @@ async function main(): Promise<void> {
     if (task === "notify-expiring" || task === "all") {
       const sent = await notifyExpiringListings({ db, env, logger });
       console.log(`期限予告メール: ${sent}件`);
+    }
+
+    if (task === "purge-access" || task === "cleanup" || task === "all") {
+      // ★止めないこと。★ 開示のために持っている表が、消さないまま溜まると
+      // そのまま漏洩時の被害の大きさになる。
+      const purged = await purgeExpiredAccessRecords(db);
+      console.log(`発信者情報の削除: ${purged}件`);
     }
 
     if (task === "purge-accounts" || task === "all") {

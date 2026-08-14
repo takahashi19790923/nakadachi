@@ -67,6 +67,8 @@ export function testEnv(): AppEnv {
     SESSION_SECRET: "test-session-secret-not-a-real-value-0123456789",
     EMAIL_ENCRYPTION_KEY: toBase64Url(new Uint8Array(32).fill(7)),
     EMAIL_INDEX_KEY: toBase64Url(new Uint8Array(32).fill(9)),
+    // 発信者情報の暗号化鍵。上の2つとは別の値にしてある（本番と同じ扱い）。
+    ACCESS_LOG_KEY: toBase64Url(new Uint8Array(32).fill(11)),
     // ★実在の鍵ではない。★ 送信経路を通したいので値は入れる。
     // 送信先の fetch はテスト側で横取りするので、外へは出ない
     // （鍵が無いと email-service が送信自体を飛ばし、本文を検証できない）。
