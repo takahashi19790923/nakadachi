@@ -68,25 +68,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # ★DB を与える。★ 無いと、投稿一覧・詳細・地域ページが
-    # ConfigurationError で 503 になり、404 を確かめる検査が落ちる。
-    # 「DB を使わない画面だけ緑」では、壊れても気づけない。
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: nakadachi_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL_DEV: postgresql://postgres:postgres@localhost:5432/nakadachi_ci
+    # ★ここに PostgreSQL のサービスコンテナは置けない。★
+    # アプリは @neondatabase/serverless を使っており、素の PostgreSQL とは
+    # 話せない（実測: "Error connecting to database: Network connection lost"）。
+    # そのため CI では DB を使う画面を検査できない。
+    # DB を使う検査（404 を返すか等）は spec 側で /api/health を見て飛ばす。
+    #
+    # 本気で CI から DB を触るなら、Neon のブランチを CI ごとに作る
+    # （neondatabase/create-branch-action）。Neon の API キーを CI へ
+    # 置くことになるので、入れるかどうかは運用の判断。
 
     steps:
       - name: リポジトリを取得
@@ -109,19 +99,6 @@ jobs:
 
       - name: ブラウザを用意
         run: pnpm exec playwright install --with-deps chromium
-
-      # マイグレーションと初期データ。pg_trgm も 0000 で入る。
-      - name: DB を用意
-        run: |
-          pnpm run db:migrate
-          pnpm run db:seed
-
-      # ★.dev.vars はビルド時に build/server/ へコピーされる。★
-      # ビルドより前に書いておかないと、preview サーバーが DB 無しで起動する。
-      - name: アプリへ接続先を渡す
-        run: |
-          node scripts/dev-setup.mjs
-          echo "DATABASE_URL=\"$DATABASE_URL_DEV\"" >> .dev.vars
 
       # ★本番ビルドに対して実行する。★ 開発サーバーだと Vite が
       # HMR 用のインラインスクリプトを差し込み、CSP 違反が必ず出るため

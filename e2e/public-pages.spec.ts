@@ -204,16 +204,46 @@ test.describe("アクセシビリティの土台", () => {
  * 見た目ではなく応答そのものを見張る。
  */
 test.describe("見つからないときの応答", () => {
-  const missing = [
+  /*
+   * ★DB が無い環境では、DB を触る経路の検査を飛ばす。★
+   * CI にはデータベースが無い（アプリは Neon 専用ドライバを使っており、
+   * 素の PostgreSQL とは話せないため、サービスコンテナでは代用できない）。
+   * DB が無いと一覧・詳細・地域ページは 503 になり、404 の検査は必ず落ちる。
+   *
+   * ★黙って飛ばさない。★ 何を検査しなかったかを必ず出力する。
+   * 飛ばした事実が見えないと「全部緑だから大丈夫」と読まれてしまう。
+   */
+  let hasDb = false;
+  test.beforeAll(async ({ request }) => {
+    try {
+      const res = await request.get("/api/health");
+      hasDb = res.ok() && ((await res.json()) as { db?: boolean }).db === true;
+    } catch {
+      hasDb = false;
+    }
+    if (!hasDb) {
+      console.warn(
+        "[E2E] データベースが無いため、DB を触る画面の検査を飛ばします。" +
+          "（一覧・詳細・地域ページの 404 とトップの 200）",
+      );
+    }
+  });
+
+  /** DB が要らない経路。ルーターとガードだけで完結する */
+  const missingWithoutDb = [
     "/zzz-such-page-does-not-exist",
-    "/c/no-such-category",
-    "/area/9999",
-    "/listings/01JQZZZZZZZZZZZZZZZZZZZZZZ",
     // 管理画面は「存在すら知らせない」ので 404（403 ではない）
     "/admin",
   ];
 
-  for (const path of missing) {
+  /** DB を引いた結果として 404 になる経路 */
+  const missingWithDb = [
+    "/c/no-such-category",
+    "/area/9999",
+    "/listings/01JQZZZZZZZZZZZZZZZZZZZZZZ",
+  ];
+
+  for (const path of missingWithoutDb) {
     test(`${path} は 404 を返す`, async ({ page }) => {
       const response = await page.goto(path);
       expect(response?.status()).toBe(404);
@@ -223,8 +253,25 @@ test.describe("見つからないときの応答", () => {
     });
   }
 
+  for (const path of missingWithDb) {
+    test(`${path} は 404 を返す（DBが要る）`, async ({ page }) => {
+      test.skip(!hasDb, "データベースが無い");
+      const response = await page.goto(path);
+      expect(response?.status()).toBe(404);
+      await expect(
+        page.getByRole("heading", { name: "ページが見つかりません" }),
+      ).toBeVisible();
+    });
+  }
+
   test("公開中のページは 200 のまま", async ({ page }) => {
-    for (const path of ["/", "/c/sell-buy", "/legal/terms", "/search?q=x"]) {
+    // 法務ページは DB を使わないので、DB の有無によらず必ず見る。
+    for (const path of ["/legal/terms", "/legal/prohibited"]) {
+      const response = await page.goto(path);
+      expect(response?.status(), path).toBe(200);
+    }
+    test.skip(!hasDb, "データベースが無い");
+    for (const path of ["/", "/c/sell-buy", "/search?q=x"]) {
       const response = await page.goto(path);
       expect(response?.status(), path).toBe(200);
     }
