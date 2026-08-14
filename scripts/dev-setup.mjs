@@ -57,5 +57,21 @@ ADMIN_BASIC_AUTH_USER="local-admin"
 ADMIN_BASIC_AUTH_PASS="${randomBytes(16).toString("base64url")}"
 `;
 
-writeFileSync(TARGET, contents, "utf8");
-console.log(`${TARGET} を作成しました（ローカル専用のダミー値）。`);
+/*
+ * ★"wx" で書く。★ 上の existsSync とこの書き込みの間にファイルが
+ * 作られると、素の writeFileSync は黙って上書きする。このスクリプトは
+ * 「本物の鍵が入っていても壊さない」ことを約束しているので、
+ * 確認と書き込みが別々の操作になっていること自体が穴になる。
+ * "wx" は「無ければ作る、あれば失敗する」を1回の操作で行う。
+ * （CodeQL の js/file-system-race が指摘した箇所）
+ */
+try {
+  writeFileSync(TARGET, contents, { encoding: "utf8", flag: "wx" });
+  console.log(`${TARGET} を作成しました（ローカル専用のダミー値）。`);
+} catch (error) {
+  if (error && error.code === "EEXIST") {
+    console.log(`${TARGET} は既にあります。変更しません。`);
+    process.exit(0);
+  }
+  throw error;
+}
