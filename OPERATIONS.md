@@ -4,32 +4,53 @@
 
 ## 1. 定期処理
 
+**Workers の Cron Trigger で自動実行されます。** 手で流す必要はありません。
+設定は `wrangler.jsonc` の `triggers.crons`、中身は `app/server/cron.server.ts`。
+
+| 時刻（UTC / JST） | 処理 | 内容 |
+|---|---|---|
+| 毎時 00分 | `expireListings` | 掲載期限を過ぎた投稿を `expired` にする |
+| 19:20 / **04:20** | `purgeAccounts` | **30日を過ぎた退会依頼を実際に実行する** |
+| 〃 | `purgeAccessRecords` | **保存期間(183日)を過ぎた発信者情報を消す** |
+| 〃 | `purgeDeletedImages` | 削除待ちの画像を R2 から消す |
+| 〃 | `notifyExpiring` | 期限の3日前に投稿者へ知らせる |
+| 〃 | `purgeSessions` / `purgeTokens` / `purgeRateLimits` | 期限切れの掃除 |
+
+日次は**利用者に告知した削除を先に**実行します。実行時間の上限に当たっても、
+約束したものが優先して走るようにするためです。
+
+### 見かた
+
+結果は Worker のログに1行で出ます。
+
 ```bash
-node --experimental-strip-types scripts/cron.ts <task>
+npx wrangler tail nakadachi-production --format pretty
 ```
 
-| task | 内容 | 推奨する頻度 |
-|---|---|---|
-| `expire-listings` | 掲載期限を過ぎた投稿を `expired` にする | 1時間ごと |
-| `notify-expiring` | 期限の3日前に投稿者へ知らせる | 1日1回 |
-| `purge-accounts` | **30日を過ぎた退会依頼を実際に実行する** | 1日1回 |
-| `cleanup` | 期限切れのセッション・トークン・レート制限を掃除する | 1日1回 |
-| `all` | 上のすべて | — |
+```
+cron finished  cron=20 19 * * *  purgeAccounts=0 purgeAccessRecords=12 ...
+```
 
-R2 の掃除（`purge-media`）だけは binding が要るため Node からは実行できません。
-Workers 側の cron trigger、または管理画面からの操作として足してください。
+★件数が数字ではなく `failed` になっていたら、その処理が落ちています。★
+0件と失敗を区別できるようにしてあります。1つ落ちても残りは走ります。
 
-### 実行方法
+### 手で流したいとき
 
-**GitHub Actions のスケジュール実行**を推奨します。
-`DATABASE_URL`（アプリ用ロール）と鍵を Environment Secrets へ置き、
-`production` environment に承認ルールを設定してください。
+```bash
+npx wrangler dev --test-scheduled
+```
 
-`rewrite-uptime` のような別 Worker の Cron Trigger から HTTP で叩く形にする
-場合は、その口に必ず認証をかけてください（誰でも叩ける口にしない）。
+別のターミナルから `curl "http://localhost:8787/__scheduled?cron=20+19+*+*+*"`。
 
-> **`purge-accounts` は失敗すると終了コード1で落ちます。**
-> 「消えたつもり」を作らないためです。**失敗を無視しないでください。**
+> **⚠ 2026-08-16 まで、定期処理は1度も走っていませんでした。**
+> `scripts/cron.ts` に書いてはあったものの、`~/` 別名を使うモジュールを
+> Node が読めず起動すらせず（`ERR_MODULE_NOT_FOUND`）、しかも起動する設定が
+> どこにもありませんでした。**「30日後に削除します」「183日で削除します」と
+> 告知しながら、実際には消していない状態でした。**
+>
+> 同じことを繰り返さないよう、`test-integration/erasure.test.ts` に
+> **入口から呼ぶ**検査を置いてあります。個々の削除関数だけを検査していると、
+> 呼び出す側が壊れていることに気づけません（実際そうなっていました）。
 
 ---
 

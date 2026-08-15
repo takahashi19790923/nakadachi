@@ -79,6 +79,17 @@
 					"custom_domain": true
 				}
 			],
+			/*
+			 * ★定期処理。env ごとに書く（vars と同じく継承されない）。★
+			 * 中身は workers/app.ts の scheduled と app/server/cron.server.ts。
+			 * 時刻は UTC。"20 19 * * *" は日本時間の 04:20。
+			 *
+			 * ここが無いと、退会の30日後の削除も発信者情報の183日での削除も
+			 * 一切走らない。2026-08-16 まで実際にその状態だった。
+			 */
+			"triggers": {
+				"crons": ["0 * * * *", "20 19 * * *"]
+			},
 			// ★workers.dev を明示的に閉じる。★
 			// 開いていると同じ内容が *.workers.dev でも見え、こちらは
 			// TURNSTILE_EXPECTED_HOSTS に一致しないので認証だけが壊れる。
@@ -114,6 +125,10 @@
 					"custom_domain": true
 				}
 			],
+			// preview と同じ。継承されないので、こちらにも必ず書く。
+			"triggers": {
+				"crons": ["0 * * * *", "20 19 * * *"]
+			},
 			// preview と同じ理由で明示的に閉じる。
 			"workers_dev": false
 		}
