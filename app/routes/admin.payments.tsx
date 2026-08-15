@@ -1,6 +1,6 @@
 import { Form, Link } from "react-router";
 
-import { CsrfInput, ErrorSummary } from "~/components/form";
+import { CsrfInput, ErrorSummary, NoticeSummary } from "~/components/form";
 import { formatDateTimeJa } from "~/domain/listing-view";
 import { formatJpy } from "~/domain/pricing";
 import { privatePageMeta } from "~/domain/seo";
@@ -59,7 +59,7 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     const paymentId = formString(formData, "paymentId");
     const reason = formString(formData, "reason").trim();
     if (reason.length < 5) {
-      return { message: "返金の理由を5文字以上で入力してください。" };
+      return { message: "返金の理由を5文字以上で入力してください。", notice: null };
     }
 
     // ★返金は管理画面から明示的に実行する。★ 非公開化では自動返金しない。
@@ -88,13 +88,14 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     });
 
     return {
-      message:
+      message: null,
+      notice:
         "返金を依頼しました。実際の反映は決済事業者からの通知を受けてから行われます。",
     };
   } catch (error) {
     if (error instanceof Response) throw error;
     context.logger.error("refund failed", error);
-    return { message: toPublicError(error).message };
+    return { message: toPublicError(error).message, notice: null };
   }
 }
 
@@ -108,7 +109,9 @@ export default function AdminPayments({
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
       <h1 className="text-2xl font-bold text-washi-900">決済状況（管理）</h1>
 
+      {/* ★成功と失敗を別の枠で出す。★ 決済の操作は読み違えが直接お金に響く */}
       <ErrorSummary message={actionData?.message} />
+      <NoticeSummary message={actionData?.notice} />
 
       <ul className="mt-6 space-y-2">
         {payments.map((payment) => (

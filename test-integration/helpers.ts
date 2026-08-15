@@ -9,6 +9,7 @@ import { asDb, type Db } from "~/server/db.server";
 import type { AppEnv } from "~/server/env.server";
 import { nullLogger } from "~/server/logger.server";
 import { emailIndexHmac, encryptString, toBase64Url } from "~/server/crypto.server";
+import { clearLocationCache } from "~/server/repositories/location-repository.server";
 import { createUser } from "~/server/repositories/user-repository.server";
 
 /**
@@ -47,6 +48,13 @@ export async function resetDatabase(): Promise<Db> {
   const db = testDb();
   await truncateAll(db);
   await seedAll(db);
+  /*
+   * ★地域データのキャッシュを捨てる。★ 参照データはアイソレート内に
+   * 持ち回るので、消さないと前のテストで読んだ内容を見てしまう。
+   * TRUNCATE した直後に「地域がある」ことになり、原因の分かりにくい
+   * 通り方をする。
+   */
+  clearLocationCache();
   return db;
 }
 

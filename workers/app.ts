@@ -69,6 +69,21 @@ export default {
     const { getDb, dispose } = createRequestDb(env);
     const nonce = generateNonce();
 
+    /*
+     * 応答後に続ける処理の預かり先。
+     *
+     * ★ここを通さずに ctx.waitUntil へ直接渡してはいけない。★
+     * 下の finally が dispose() も waitUntil で走らせるため、両者が同時に
+     * 進み、★接続を畳んだあとにクエリが飛ぶことがある。★
+     * ローカル（miniflare）では再現せず、本番で時々失敗する形になる。
+     * 預かったものが全部片づいてから畳む。
+     */
+    const deferred: Promise<unknown>[] = [];
+    const defer = (promise: Promise<unknown>) => {
+      // 失敗で Worker ごと落とさない。中身の記録は呼び出し側の責任。
+      deferred.push(promise.catch(() => undefined));
+    };
+
     // CSRF の対（Cookie 側の乱数とフォームへ埋める署名付きトークン）を
     // ここで1回だけ用意する。各ローダーが個別に発行すると、同じ画面の中で
     // 別々の値が出て、後から描かれたフォームだけが通らなくなる。
@@ -107,6 +122,7 @@ export default {
       routerContext.set(appContext, {
         env,
         ctx,
+        defer,
         getDb,
         logger,
         nonce,
@@ -134,8 +150,15 @@ export default {
         nonce,
       );
     } finally {
-      // 応答を返したあとに接続を畳む。ここで await すると応答が遅れる。
-      ctx.waitUntil(dispose());
+      /*
+       * 応答を返したあとに接続を畳む。ここで await すると応答が遅れる。
+       * ★預かった後処理が終わるのを待ってから畳む。★ 先に畳むと、
+       * 後処理のクエリが閉じた接続へ飛ぶ（本番で時々だけ失敗する形になる）。
+       */
+      ctx.waitUntil(
+        (deferred.length > 0 ? Promise.allSettled(deferred) : Promise.resolve())
+          .then(() => dispose()),
+      );
     }
   },
 } satisfies ExportedHandler<Env>;

@@ -102,7 +102,7 @@ export async function action({ request, context: rawContext, params }: Route.Act
 
     // ★非公開にしても自動返金はしない。★ 返金は決済状況の画面から明示的に行う。
     if (target === "suspended" || target === "rejected") {
-      context.ctx.waitUntil(
+      context.defer(
         notifyListingSuspended({
           db,
           env: context.env,

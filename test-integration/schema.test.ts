@@ -1,5 +1,14 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { locations } from "~/db/schema/index.ts";
+import {
+  clearLocationCache,
+  getLocation,
+  isValidAreaPair,
+  listCities,
+  listPrefectures,
+} from "~/server/repositories/location-repository.server";
 
 import {
   HANDOVER_METHODS,
@@ -183,5 +192,68 @@ describe("seed", () => {
       sql`select count(*)::int as count from locations`,
     );
     expect(after.rows[0]?.count).toEqual(before.rows[0]?.count);
+  });
+});
+
+/**
+ * 地域データの読み出し。
+ *
+ * ★参照データをアイソレート内に持ち回るようにした。★ 1往復あたり
+ * 100〜250ms かかる環境なので、地域ページや投稿フォームで効く。
+ * 持ち回る以上、「古い値を返さないこと」と「絞り方を間違えないこと」を
+ * ここで見張る。
+ */
+describe("地域データ", () => {
+  it("一覧には有効なものだけ、個別取得では無効なものも引ける", async () => {
+    const db = await resetDatabase();
+
+    const before = await listPrefectures(db);
+    expect(before.length).toBeGreaterThan(0);
+    const target = before[0]!;
+
+    // 使われなくなった地域は削除せず isActive を落とす運用。
+    await db
+      .update(locations)
+      .set({ isActive: false })
+      .where(eq(locations.code, target.code));
+    clearLocationCache();
+
+    const after = await listPrefectures(db);
+    expect(after.some((row) => row.code === target.code)).toBe(false);
+
+    /*
+     * ★個別取得では引けること。★ ここで null にすると、その地域を
+     * 参照している過去の投稿の画面が開けなくなる。
+     */
+    const single = await getLocation(db, target.code);
+    expect(single?.code).toBe(target.code);
+  });
+
+  it("キャッシュを捨てれば、入れ替えた内容がすぐ反映される", async () => {
+    const db = await resetDatabase();
+    const first = await listPrefectures(db);
+    expect(first.length).toBeGreaterThan(0);
+
+    // 捨てずに DB だけ変えると古い内容が返る（持ち回っているので当然）。
+    await db.delete(locations).where(eq(locations.kind, "city"));
+    await db.delete(locations).where(eq(locations.kind, "prefecture"));
+
+    clearLocationCache();
+    const afterClear = await listPrefectures(db);
+    expect(afterClear).toHaveLength(0);
+  });
+
+  it("市区町村と都道府県の対応を、組み合わせの検査で使える", async () => {
+    const db = await resetDatabase();
+    const prefectures = await listPrefectures(db);
+    const prefecture = prefectures[0]!;
+    const cities = await listCities(db, prefecture.code);
+    expect(cities.length).toBeGreaterThan(0);
+
+    expect(await isValidAreaPair(db, prefecture.code, cities[0]!.code)).toBe(true);
+    // 別の都道府県の下にある市区町村は通さない（URL を並べ替えただけの
+    // ページを量産させない）。
+    const other = prefectures.find((p) => p.code !== prefecture.code)!;
+    expect(await isValidAreaPair(db, other.code, cities[0]!.code)).toBe(false);
   });
 });
