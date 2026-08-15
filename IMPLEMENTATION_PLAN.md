@@ -399,7 +399,7 @@ draft ──(本人が決済へ)──> payment_pending ──(Webhook: 支払�
 | 9 | GitHub の Secret Scanning / Push Protection の有効化 | リポジトリ設定 |
 | 10 | `rewrite-uptime/src/targets.js` への監視対象追加 | 別リポジトリ |
 | 11 | `rewrite-co.com` トップページへのカード追加 | 別リポジトリ |
-| 12 | **規約文面の法務確認** | ひな型のまま公開しないこと |
+| 12 | 規約文面の法務確認 | 2026-08-14 完了 |
 
 > **秘密情報の受け渡しについて。** 値をチャットやソースコードへ貼らないでください。
 > `wrangler secret put` を対話で実行して貼り付けるか、`pnpm run secrets:put` を

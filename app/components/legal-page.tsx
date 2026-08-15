@@ -13,7 +13,14 @@ export function LegalPage({
   title,
   lastUpdated,
   children,
-  showTemplateNotice = true,
+  /*
+   * ★既定は false。★ 2026-08-14 に運営者が法務確認を済ませたため、
+   * 「ひな型です」の但し書きを外した。
+   *
+   * 文面を大きく書き換えたときは、確認を受け直すまで true に戻すこと。
+   * 確認を受けていない文面を、受けたものと同じ見た目で出さないため。
+   */
+  showTemplateNotice = false,
 }: {
   title: string;
   lastUpdated: string;
