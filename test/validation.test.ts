@@ -335,3 +335,62 @@ describe("検索条件の読み取り", () => {
     expect(parsed.page).toBe(1);
   });
 });
+
+/**
+ * ★検証エラーの文言が英語のまま利用者へ出ないこと。★
+ *
+ * zod の既定文言は英語（"Invalid input"）で、個々の項目に文言を
+ * 書き忘れるとそのまま画面に出る。実際に投稿フォームで出た
+ * （2026-08-16、投稿種別を選ばずに送信したとき）。
+ * 全部の項目に文言を書いて回るのは抜けるので、既定を日本語に寄せて
+ * ここで見張る。
+ */
+describe("★検証エラーの文言に英語を出さない★", () => {
+  /** 日本語（ひらがな・カタカナ・漢字）を1文字以上含むか */
+  function hasJapanese(message: string): boolean {
+    return /[\u3040-\u30ff\u4e00-\u9fff]/.test(message);
+  }
+
+  it("必須項目が空でも英語にならない", () => {
+    // 何も入っていない入力。全項目ぶんのエラーが出る。
+    const result = listingInputSchema.safeParse({ categorySlug: "sell-buy" });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+
+    expect(result.error.issues.length).toBeGreaterThan(0);
+    for (const issue of result.error.issues) {
+      expect(
+        hasJapanese(issue.message),
+        `英語の文言が残っている: ${issue.path.join(".")} → ${issue.message}`,
+      ).toBe(true);
+    }
+  });
+
+  it("選ぶ項目は「選択してください」、入力欄は「入力してください」", () => {
+    const result = listingInputSchema.safeParse({ categorySlug: "sell-buy" });
+    if (result.success) throw new Error("入力が通ってしまった");
+
+    const messageOf = (field: string) =>
+      result.error.issues.find((i) => i.path[0] === field)?.message;
+
+    // ラジオ・セレクト
+    expect(messageOf("kind")).toBe("選択してください");
+    expect(messageOf("itemCondition")).toBe("選択してください");
+    expect(messageOf("handoverMethod")).toBe("選択してください");
+    // 入力欄
+    expect(messageOf("title")).toBe("入力してください");
+    expect(messageOf("body")).toBe("入力してください");
+  });
+
+  it("各スキーマに書いた文言のほうが優先される", () => {
+    // 掲載期間は listing.ts が自前の文言を持っている。
+    const result = listingInputSchema.safeParse(
+      baseInput({ categorySlug: "sell-buy", kind: "sell", durationDays: 9999 }),
+    );
+    if (result.success) throw new Error("入力が通ってしまった");
+    const message = result.error.issues.find(
+      (i) => i.path[0] === "durationDays",
+    )?.message;
+    expect(message).toBe("掲載期間の指定が不正です");
+  });
+});

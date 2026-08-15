@@ -195,6 +195,63 @@ binding は `wrangler.jsonc` に定義済み（`MEDIA`）です。
 > `charge.refunded` は購読していても届かないことがあります。
 > `refund.*` も併せて購読し、**どれか1つでも届けば止まる**ようにしてあります。
 
+#### Managed Payments について
+
+Checkout Session を作るとき `managed_payments[enabled]=false` を必ず送っています
+（`stripe-client.server.ts`）。これが無いと
+`Invalid line_items[0]: the product tax code is missing` で 400 になります。
+
+★ここで税コードを足して回避してはいけません。★ エラーは消えますが、
+Stripe が販売者（Merchant of Record）のままになり、消費税の納税義務も
+Stripe 側へ移ります。当サービスは規約・特商法表記で「取引の当事者ではない、
+場を提供するだけ」と書いているので、実態と食い違います。
+
+**このアカウントには「Managed Payments を無効にする」設定はありません**
+（2026-08-16 実測）。設定 → Managed Payments は
+「使ってみる（取引ごとに 3.5% の追加手数料）」という加入を勧める案内で、
+未開始の状態です。切るスイッチを探す必要はありません。コード側だけで足ります。
+
+### 8.1 本番モードへ切り替えるとき
+
+**2026-08-16 時点で、本番はまだ有効化されていません。** テストモードのみ動作します。
+`/api/config` の `secretsConfigured.stripe` が `false` なのはこのためです。
+
+ダッシュボード右上の「本番環境に切り替える」を押すと有効化ウィザードが開きます。
+残っている項目は次のとおりです（それ以外は入力済み）。
+
+- ビジネスの確認 → **割賦販売法に関する質問**（特商法違反・消費者契約法違反の有無）
+- オプションを追加
+- 確認して送信
+
+> ⚠ 法人情報は**他の Stripe アカウントと共有**です
+> （ウィザードに「この法人に変更を加えると、それを使用するすべてのアカウントが
+> 更新されます」と表示されます）。ここでの変更は他サービスにも及びます。
+
+有効化が通ったあとの手順:
+
+1. 本番モードで Webhook 送信先を作る
+   （URL は `https://nakadachi.rewrite-co.com/api/stripe/webhook`、イベントは §8 と同じ8件）
+2. 本番の `sk_live_…` と、1で発行された `whsec_…` を投入する
+
+   ```bash
+   npx wrangler secret put STRIPE_SECRET_KEY
+   ```
+
+   ```bash
+   npx wrangler secret put STRIPE_WEBHOOK_SECRET
+   ```
+
+   値はプロンプトに貼り付けます。**コマンドラインに直接書かないでください**
+   （PowerShell の履歴に平文で残ります）。
+3. `curl https://nakadachi.rewrite-co.com/api/config` で
+   `"stripe":true,"stripeWebhook":true` を確認する
+4. 本番で110円の決済を1回通し、公開されることを確認する
+
+> サンドボックスの Webhook 送信先（preview 向け）はそのままで構いません。
+> ★消す必要があるのは「サンドボックスの送信先が本番URLを向いている」場合だけ★です。
+> その構成だと、テスト鍵を知っている人がテストカードで本番へ正規の署名付き通知を
+> 送れてしまい、署名検証では止められません。現在は preview を向いているので問題ありません。
+
 ### 9. Secret を投入する
 
 ```bash
