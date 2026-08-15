@@ -3,6 +3,7 @@ import { createRequestHandler, RouterContextProvider } from "react-router";
 import { ulid } from "~/domain/ulid.ts";
 import { appContext } from "~/server/app-context.ts";
 import { readCookie, serializeCookie } from "~/server/cookies.server.ts";
+import { runScheduledTasks } from "~/server/cron.server.ts";
 import {
   csrfCookieName,
   csrfSignature,
@@ -159,6 +160,41 @@ export default {
         (deferred.length > 0 ? Promise.allSettled(deferred) : Promise.resolve())
           .then(() => dispose()),
       );
+    }
+  },
+
+  /**
+   * 定期処理。wrangler.jsonc の triggers.crons から呼ばれる。
+   *
+   * ★ここに置いた理由。★ 以前は Node のスクリプト（scripts/cron.ts）に
+   * 書いてあったが、`~/` 別名を使うモジュールを読めず起動すらしなかった。
+   * 起動する設定もどこにも無く、★退会の30日後の削除も、発信者情報の
+   * 183日での削除も1度も走っていなかった。★（2026-08-16 に発覚）
+   *
+   * Worker 側なら別名がビルドで解決され、R2 の binding も使えるので
+   * 画像の物理削除まで1か所で完結する。CI に DB の接続文字列を置く必要もない。
+   *
+   * ★ここでは応答が無いので defer を使わない。★ 全部待ってから畳む。
+   */
+  async scheduled(controller, cfEnv, ctx) {
+    const env = toAppEnv(cfEnv);
+    const requestId = ulid();
+    const logger = createLogger({ requestId, environment: env.ENVIRONMENT });
+    const { getDb, dispose } = createRequestDb(env);
+
+    try {
+      await runScheduledTasks({
+        cron: controller.cron,
+        db: getDb(),
+        env,
+        logger,
+      });
+    } catch (error) {
+      // 個々の処理は runScheduledTasks の中で捕まえてある。ここへ来るのは
+      // DB へ繋げないなど、全部に共通する失敗のとき。
+      logger.error("scheduled run failed", error, { cron: controller.cron });
+    } finally {
+      ctx.waitUntil(dispose());
     }
   },
 } satisfies ExportedHandler<Env>;

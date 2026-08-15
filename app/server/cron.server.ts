@@ -1,0 +1,127 @@
+import type { Db } from "./db.server.ts";
+import type { AppEnv } from "./env.server.ts";
+import type { Logger } from "./logger.server.ts";
+import { purgeExpiredRateLimits } from "./rate-limit.server.ts";
+import { purgeExpiredSessions } from "./session.server.ts";
+import { purgeExpiredAccessRecords } from "./services/access-record-service.server.ts";
+import { purgeExpiredTokens } from "./services/auth-service.server.ts";
+import { purgeDueAccounts } from "./services/erasure-service.server.ts";
+import { expireDueListings } from "./services/listing-service.server.ts";
+import { purgeDeletedImages } from "./services/media/media-service.server.ts";
+import { notifyExpiringListings } from "./services/notification-service.server.ts";
+
+/**
+ * 定期処理。
+ *
+ * ★Workers の Cron Trigger から呼ぶ。★ 以前は Node のスクリプト
+ * （scripts/cron.ts）に書いてあったが、あれは `~/` 別名を使うモジュールを
+ * 読めず ERR_MODULE_NOT_FOUND で起動すらしなかった。しかも起動する設定も
+ * どこにも無かったので、★退会の30日後の削除も、発信者情報の183日での削除も、
+ * 1度も走っていなかった。★（2026-08-16 に発覚）
+ *
+ * Workers 側に置くと3つ良いことがある。
+ *  1. `~/` 別名がビルドで解決されるので、そのまま動く
+ *  2. R2 の binding があるので、画像の物理削除もできる（Node からは不可能）
+ *  3. 秘密情報が Worker のものをそのまま使える。CI に鍵を置かなくていい
+ *
+ * ★1つが落ちても残りを必ず動かす。★ まとめて try で囲むと、退会削除が
+ * 落ちた日は発信者情報の削除も飛ぶ。約束した削除が静かに滞る。
+ */
+
+/** 実行した処理と件数。ログと戻り値に使う */
+export type CronResult = Record<string, number | string>;
+
+/** どの cron 式でどれを動かすか */
+export const CRON_HOURLY = "0 * * * *";
+/** 日次。UTC 19:20 = JST 04:20（利用の少ない時間帯に寄せる） */
+export const CRON_DAILY = "20 19 * * *";
+
+interface TaskContext {
+  db: Db;
+  env: AppEnv;
+  logger: Logger;
+}
+
+/** 1つの処理を走らせる。落ちても他を止めない */
+async function runTask(
+  name: string,
+  logger: Logger,
+  result: CronResult,
+  task: () => Promise<number>,
+): Promise<void> {
+  try {
+    result[name] = await task();
+  } catch (error) {
+    // ★件数ではなく失敗として残す。★ 0件と区別がつかないと、
+    // 「毎日動いているが毎回落ちている」に気づけない。
+    result[name] = "failed";
+    logger.error(`cron task failed: ${name}`, error);
+  }
+}
+
+/** 1時間ごと。掲載期限の反映だけ */
+async function runHourly(context: TaskContext): Promise<CronResult> {
+  const result: CronResult = {};
+  await runTask("expireListings", context.logger, result, async () => {
+    const expired = await expireDueListings(context.db);
+    return expired.length;
+  });
+  return result;
+}
+
+/** 1日1回。削除と通知 */
+async function runDaily(context: TaskContext): Promise<CronResult> {
+  const { db, env, logger } = context;
+  const result: CronResult = {};
+
+  // ★約束した削除を先に置く。★ 実行時間の上限に当たった場合でも、
+  // 「30日で消します」「183日で消します」と書いたものが優先して走る。
+  await runTask("purgeAccounts", logger, result, async () => {
+    const { purged, failed } = await purgeDueAccounts({ db, env, logger });
+    if (failed > 0) logger.error("account purge had failures", new Error(`failed=${failed}`));
+    return purged;
+  });
+
+  await runTask("purgeAccessRecords", logger, result, () =>
+    purgeExpiredAccessRecords(db),
+  );
+
+  // 退会で削除待ちに入った画像を R2 から実際に消す。
+  await runTask("purgeDeletedImages", logger, result, () =>
+    purgeDeletedImages({ db, env, logger }),
+  );
+
+  await runTask("notifyExpiring", logger, result, () =>
+    notifyExpiringListings({ db, env, logger }),
+  );
+
+  await runTask("purgeSessions", logger, result, () => purgeExpiredSessions(db));
+  await runTask("purgeTokens", logger, result, () => purgeExpiredTokens(db));
+  await runTask("purgeRateLimits", logger, result, () =>
+    purgeExpiredRateLimits(db),
+  );
+
+  return result;
+}
+
+/**
+ * Cron Trigger の入口。
+ *
+ * 知らない cron 式が来たら日次を走らせる。式を足したときに
+ * 「何も動かない」より「多めに動く」ほうが安全（どれも冪等）。
+ */
+export async function runScheduledTasks(options: {
+  cron: string;
+  db: Db;
+  env: AppEnv;
+  logger: Logger;
+}): Promise<CronResult> {
+  const { cron, db, env, logger } = options;
+  const context: TaskContext = { db, env, logger };
+
+  const result =
+    cron === CRON_HOURLY ? await runHourly(context) : await runDaily(context);
+
+  logger.info("cron finished", { cron, ...result });
+  return result;
+}

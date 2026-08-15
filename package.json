@@ -31,7 +31,6 @@
     "check:build-secrets": "node scripts/check-secrets.mjs --build",
     "deploy:preview": "pnpm run build:preview && pnpm run check:build-secrets && wrangler deploy",
     "deploy:production": "pnpm run build:production && pnpm run check:build-secrets && wrangler deploy",
-    "cron": "node --experimental-strip-types scripts/cron.ts",
     "admin:create": "node --experimental-strip-types scripts/create-admin.ts",
     "cf-typegen": "wrangler types",
     "postinstall": "wrangler types"
