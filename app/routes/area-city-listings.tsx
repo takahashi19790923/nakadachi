@@ -13,8 +13,14 @@ import { getApp } from "~/server/app-context";
 export async function loader({ request, context: rawContext, params }: Route.LoaderArgs) {
   const context = getApp(rawContext);
   const db = context.getDb();
-  const prefecture = await requireLocation(db, params.prefectureCode, "prefecture");
-  const city = await requireLocation(db, params.cityCode, "city");
+  /*
+   * 都道府県と市区町村は互いを必要としない（親子の確認は下で行う）。
+   * 順に待つと DB を1往復ぶん余計に使う。実測で1往復 100〜250ms。
+   */
+  const [prefecture, city] = await Promise.all([
+    requireLocation(db, params.prefectureCode, "prefecture"),
+    requireLocation(db, params.cityCode, "city"),
+  ]);
 
   // ★親子関係を確かめる。★ 確かめないと、実在するコードの組み合わせを
   // 適当に並べた URL がすべて 200 を返し、同じ内容のページが量産される。

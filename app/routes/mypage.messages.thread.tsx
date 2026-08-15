@@ -37,7 +37,7 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     viewerRole: "user",
   });
 
-  context.ctx.waitUntil(
+  context.defer(
     markThreadRead(db, params.threadId, user.id).catch(() => undefined),
   );
 
@@ -102,7 +102,7 @@ export async function action({ request, context: rawContext, params }: Route.Act
       user.id,
     );
     if (counterpartId) {
-      context.ctx.waitUntil(
+      context.defer(
         notifyNewMessage({
           db,
           env: context.env,

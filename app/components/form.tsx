@@ -320,3 +320,26 @@ export function ErrorSummary({
     </div>
   );
 }
+
+/**
+ * 処理が成功したことの知らせ。
+ *
+ * ★成功を ErrorSummary で出さない。★ 赤い枠に「返金を依頼しました」と
+ * 出ていた（2026-08-16、管理画面の決済状況）。押した本人が成功したのか
+ * 失敗したのか判断できない。とくに決済まわりは、読み違えると
+ * 同じ操作を繰り返してしまう。
+ *
+ * role="status" にしているのは、読み上げで割り込ませないため
+ * （エラーは role="alert" で割り込ませる）。
+ */
+export function NoticeSummary({ message }: { message?: string | null }) {
+  if (!message) return null;
+  return (
+    <div
+      role="status"
+      className="mt-4 rounded-lg border border-ai-300 bg-ai-50 p-4"
+    >
+      <p className="font-semibold text-ai-900">{message}</p>
+    </div>
+  );
+}

@@ -1,7 +1,12 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
+import {
+  auditLogs,
+  listings,
+  payments,
+  paymentWebhookEvents,
+} from "~/db/schema/index.ts";
 import { LISTING_FEE_JPY } from "~/domain/pricing";
 import { ulid } from "~/domain/ulid";
 import type { Db } from "~/server/db.server";
@@ -665,5 +670,160 @@ describe("★追い越された失効通知で決済中の投稿を壊さない�
     expect(result.status).toBe("processed");
     expect(await paymentStatus()).toBe("expired");
     expect(await statusOf(listingId)).toBe("draft");
+  });
+});
+
+/**
+ * ★返金の処理も、実際に効いたかどうかを見る。★
+ *
+ * 公開のときと同じ穴が返金側にもあった。transitionListing の戻り値を
+ * 見ずに「listing suspended after full refund」を必ず出していたので、
+ * 公開されていない投稿の返金でも「停止した」と記録されていた
+ * （2026-08-16、preview で下書きの投稿に対して2回出た）。
+ */
+describe("★返金の記録と実際の状態を食い違わせない★", () => {
+  function refundEvent(id: string, amount = LISTING_FEE_JPY): StripeEvent {
+    return {
+      id,
+      type: "charge.refunded",
+      created: Math.floor(Date.now() / 1000),
+      data: { object: { payment_intent: "pi_test_1", amount_refunded: amount } },
+    };
+  }
+
+  /** 決済を成功済みにして payment_intent を結びつける */
+  async function markSucceeded() {
+    await db
+      .update(payments)
+      .set({ status: "succeeded", paymentIntentId: "pi_test_1" })
+      .where(eq(payments.id, paymentId));
+  }
+
+  it("同じ返金で3通届いても、確定するのは1通だけ", async () => {
+    // ★event_id が違うので Webhook の重複判定では弾けない。★
+    // 状態を条件に入れた UPDATE で1通だけが通ることを見る。
+    await markSucceeded();
+    await db
+      .update(listings)
+      .set({ status: "published" })
+      .where(eq(listings.id, listingId));
+
+    for (const [id, type] of [
+      ["evt_multi_1", "charge.refunded"],
+      ["evt_multi_2", "refund.created"],
+      ["evt_multi_3", "refund.updated"],
+    ] as const) {
+      await handleStripeEvent({
+        db,
+        env,
+        logger: testLogger,
+        event: { ...refundEvent(id), type },
+        rawPayload: "{}",
+      });
+    }
+
+    expect(await paymentStatus()).toBe("refunded");
+    expect(await statusOf(listingId)).toBe("suspended");
+
+    // 監査ログは1件だけ。3件出ていたら条件付き UPDATE が効いていない。
+    const logs = await db
+      .select({ id: auditLogs.id })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.targetId, listingId),
+          eq(auditLogs.action, "payment.refunded"),
+        ),
+      );
+    expect(logs).toHaveLength(1);
+  });
+
+  it("公開前の投稿の返金でも、決済記録だけは正しく確定する", async () => {
+    // 掲載は出ていないので停止しようがない。★それでも黙って
+    // 「停止した」ことにしない。★ 決済記録は返金済みになる。
+    await markSucceeded();
+    await db
+      .update(listings)
+      .set({ status: "draft" })
+      .where(eq(listings.id, listingId));
+
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: refundEvent("evt_refund_draft"),
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("processed");
+    expect(await paymentStatus()).toBe("refunded");
+    expect(await statusOf(listingId)).toBe("draft");
+  });
+
+  it("★返金済みの決済で公開しない★（返金したのに掲載が出る、を作らない）", async () => {
+    // 返金が先に確定し、そのあとで支払い成立の通知が届く順序。
+    // イベントの到着順は決済事業者側の都合で決まる。
+    await db
+      .update(payments)
+      .set({ status: "refunded", refundedAmountJpy: LISTING_FEE_JPY })
+      .where(eq(payments.id, paymentId));
+
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ id: "evt_after_refund" }),
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(await statusOf(listingId)).not.toBe("published");
+    expect(await paymentStatus()).toBe("refunded");
+  });
+});
+
+/**
+ * ★通知メールを応答の中で待たない。★
+ *
+ * Webhook の応答時間が平均2.7秒あった（2026-08-16、Stripe の画面で実測）。
+ * メール1通で DB を2〜3往復し、さらに送信APIを叩くのを応答の中で待っていた。
+ * 決済事業者は応答が遅いと再送するので、速さは正しさにも効く。
+ */
+describe("★決済の応答に通知メールを待たせない★", () => {
+  it("defer を渡すと、公開の確定を終えた時点で応答できる", async () => {
+    const deferred: Promise<unknown>[] = [];
+
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ id: "evt_defer" }),
+      rawPayload: "{}",
+      defer: (p) => deferred.push(p),
+    });
+
+    // 応答を返す時点で、公開も決済記録も確定していること。
+    expect(result.status).toBe("processed");
+    expect(await statusOf(listingId)).toBe("published");
+    expect(await paymentStatus()).toBe("succeeded");
+
+    // ★通知は応答の外に出ている。★ 0件なら待ってしまっている。
+    expect(deferred).toHaveLength(1);
+
+    // 預けたぶんは最後まで走りきる（接続を畳む前に片づける前提）。
+    await Promise.allSettled(deferred);
+  });
+
+  it("defer を渡さなければ、その場で待つ（定期処理とテスト用）", async () => {
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ id: "evt_no_defer" }),
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("processed");
+    expect(await statusOf(listingId)).toBe("published");
   });
 });

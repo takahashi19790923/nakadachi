@@ -37,20 +37,29 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   }
 
   const db = context.getDb();
-  const listing = await getPublishedListing(db, params.listingId);
+
+  /*
+   * ★閲覧者の判定は投稿の取得と同時に始める。★
+   * どちらも相手を必要としない。順に待つと DB を1往復ぶん余計に待つ。
+   * このサービスの DB はシンガポールにあり、1往復あたり 100〜250ms かかる
+   * （2026-08-16 実測）。いちばん見られる画面なので、ここが効く。
+   */
+  const [listing, viewer] = await Promise.all([
+    getPublishedListing(db, params.listingId),
+    loadUser({ request, context }),
+  ]);
 
   // 公開中でなければ、下書き・決済待ち・削除済みのいずれであっても 404。
   // 「非公開です」と返すと、その ID の投稿が存在することが分かる。
   if (!listing) throw notFound(`listing not visible: ${params.listingId}`);
 
-  const viewer = await loadUser({ request, context });
   const [owner, favorited] = await Promise.all([
     getPublicProfile(db, listing.ownerId),
     viewer ? isFavorited(db, viewer.id, listing.id) : Promise.resolve(false),
   ]);
 
   // 閲覧数の更新で応答を待たせない。失敗しても画面は壊さない。
-  context.ctx.waitUntil(
+  context.defer(
     incrementViewCount(db, listing.id).catch(() => undefined),
   );
 

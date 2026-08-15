@@ -238,6 +238,29 @@ export interface WebhookHandleResult {
   readonly detail?: string;
 }
 
+/**
+ * 応答を返したあとに回す処理の預け先。
+ *
+ * ★通知メールは決済の成否に関係ない。★ それでも応答の中で待っていたため、
+ * Webhook の応答時間が平均2.7秒になっていた（2026-08-16、Stripe の
+ * ダッシュボード実測）。メール1通で DB を2〜3往復し、さらに送信APIを叩く。
+ * 決済事業者の再送判定は応答の速さも見るので、短いほうが安全でもある。
+ *
+ * 渡されなければその場で待つ。テストと定期処理はこちらを使う
+ * （待たないと、送ったかどうかを確かめられない）。
+ */
+export type DeferFn = (promise: Promise<unknown>) => void;
+
+function afterResponse(
+  defer: DeferFn | undefined,
+  task: () => Promise<void>,
+): Promise<void> {
+  const running = task();
+  if (!defer) return running;
+  defer(running);
+  return Promise.resolve();
+}
+
 /** 実際に扱うイベント。ほかは記録だけして無視する */
 const HANDLED_EVENTS = new Set([
   "checkout.session.completed",
@@ -263,6 +286,8 @@ export async function handleStripeEvent(options: {
   logger: Logger;
   event: StripeEvent;
   rawPayload: string;
+  /** 通知メールを応答の外へ出す。省略すると応答の中で待つ */
+  defer?: DeferFn;
 }): Promise<WebhookHandleResult> {
   // env は個々のハンドラへ options ごと渡す（この関数自体では使わない）。
   const { db, logger, event } = options;
@@ -375,6 +400,7 @@ async function handleSessionSucceeded(options: {
   env: AppEnv;
   logger: Logger;
   event: StripeEvent;
+  defer?: DeferFn;
 }): Promise<void> {
   const { db, env, logger, event } = options;
   const session = event.data.object;
@@ -392,12 +418,20 @@ async function handleSessionSucceeded(options: {
 
     const pendingRow = await findPaymentBySession(db, sessionId);
     if (pendingRow) {
-      await transitionListing(db, {
+      const moved = await transitionListing(db, {
         listingId: pendingRow.listingId,
         to: "payment_processing",
         actor: "system",
         expectedFrom: "payment_pending",
       });
+      // 決済待ち以外から来た場合は動かない。あとで支払い成立の通知が
+      // 届けばそこで公開されるので実害は無いが、黙って流さない。
+      if (!moved.changed && moved.from !== "payment_processing") {
+        logger.warn("listing did not move to payment_processing", {
+          listingId: pendingRow.listingId,
+          listingStatus: moved.from,
+        });
+      }
     }
     logger.info("checkout completed but not paid yet", { sessionId });
     return;
@@ -446,6 +480,32 @@ async function handleSessionSucceeded(options: {
       })
       .where(eq(payments.id, payment.id));
     throw new Error(`metadata mismatch for session ${sessionId}`);
+  }
+
+  /*
+   * ★返金・係争が確定している決済で公開しない。★
+   *
+   * イベントの到着順は決済事業者側の都合で決まる。返金が先に確定したあとで
+   * 支払い成立の通知が届くことがありうる（後払いの決済を返金した場合など）。
+   * 下の公開処理は draft からの公開も許すので、ここで止めないと
+   * ★返金済みなのに掲載が出る。★ 掲載料を返したのに掲載が続く状態は、
+   * 決済事業者側にもアプリのエラーにも出ないので誰も気づけない。
+   *
+   * 例外にして Webhook を失敗として記録する。管理画面の先頭に件数が出る。
+   */
+  if (
+    payment.status === "refunded" ||
+    payment.status === "partially_refunded" ||
+    payment.status === "disputed"
+  ) {
+    logger.error(
+      "payment already refunded or disputed; refusing to publish",
+      new Error("refund precedes payment success"),
+      { listingId: payment.listingId, paymentId: payment.id, status: payment.status },
+    );
+    throw new AppError("conflict", "掲載を公開できませんでした。", {
+      detail: `refunded payment cannot publish: listing=${payment.listingId} status=${payment.status}`,
+    });
   }
 
   const durationDays = Number(metadata.duration_days);
@@ -534,18 +594,20 @@ async function handleSessionSucceeded(options: {
   });
 
   // ★メールの失敗で公開を巻き戻さない。★ 冪等キーがあるので、あとから
-  // 同じ鍵で再送しても二重には届かない。
-  await notifyListingPublished({
-    db,
-    env,
-    logger,
-    listingId: payment.listingId,
-    userId: payment.userId,
-  }).catch((error: unknown) => {
-    logger.error("publish notification failed", error, {
+  // 同じ鍵で再送しても二重には届かない。応答の外へ出す（afterResponse）。
+  await afterResponse(options.defer, () =>
+    notifyListingPublished({
+      db,
+      env,
+      logger,
       listingId: payment.listingId,
-    });
-  });
+      userId: payment.userId,
+    }).catch((error: unknown) => {
+      logger.error("publish notification failed", error, {
+        listingId: payment.listingId,
+      });
+    }),
+  );
 
   logger.info("listing published after payment", {
     listingId: payment.listingId,
@@ -599,7 +661,7 @@ async function findPaymentByIntent(db: Db, paymentIntentId: string) {
 
 /** 決済の失敗・失効。投稿は下書きへ戻す（再課金は発生しない） */
 async function handleSessionFailed(
-  options: { db: Db; env: AppEnv; logger: Logger; event: StripeEvent },
+  options: { db: Db; env: AppEnv; logger: Logger; event: StripeEvent; defer?: DeferFn },
   reason: string,
 ): Promise<void> {
   const { db, event } = options;
@@ -668,16 +730,18 @@ async function handleSessionFailed(
     if (result.changed) break;
   }
 
-  await notifyPaymentFailed({
-    db,
-    env: options.env,
-    logger: options.logger,
-    listingId: payment.listingId,
-    userId: payment.userId,
-    attempt: payment.id,
-  }).catch((error: unknown) => {
-    options.logger.error("payment failure notification failed", error);
-  });
+  await afterResponse(options.defer, () =>
+    notifyPaymentFailed({
+      db,
+      env: options.env,
+      logger: options.logger,
+      listingId: payment.listingId,
+      userId: payment.userId,
+      attempt: payment.id,
+    }).catch((error: unknown) => {
+      options.logger.error("payment failure notification failed", error);
+    }),
+  );
 }
 
 /**
@@ -705,7 +769,8 @@ async function handleRefundEvent(options: {
   if (!payment) return; // 他サービスの決済。自分の DB に無いので無視する
 
   if (payment.status === "refunded" || payment.status === "disputed") {
-    // すでに止めてある。監査ログを重ねない。
+    // すでに確定している。無駄な処理を省くための先読みで、これは
+    // 二重処理を防ぐ「保証」ではない（下の条件付き UPDATE が保証する）。
     return;
   }
 
@@ -720,7 +785,18 @@ async function handleRefundEvent(options: {
 
   const isFullRefund = refundedAmount >= payment.amountJpy;
 
-  await db
+  /*
+   * ★確定は条件付き UPDATE で行う。★ 上の先読みだけでは足りない。
+   *
+   * 1回の返金で Stripe は3通送ってくる（refund.created / refund.updated /
+   * charge.refunded）。event_id が違うので Webhook の重複判定では弾けず、
+   * ★3通が同時に走ると、どれもまだ succeeded を読んで全部が処理へ進む。★
+   * 実際に監査ログと通知が二重に出た（2026-08-16、preview）。
+   *
+   * 「まだ確定していない状態のときだけ更新する」を SQL の条件に入れ、
+   * 更新できた1通だけが先へ進む。
+   */
+  const claimed = await db
     .update(payments)
     .set({
       status: isFullRefund ? "refunded" : "partially_refunded",
@@ -728,12 +804,22 @@ async function handleRefundEvent(options: {
       refundedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(payments.id, payment.id));
+    .where(
+      and(
+        eq(payments.id, payment.id),
+        inArray(payments.status, ["succeeded", "partially_refunded"]),
+      ),
+    );
+
+  if ((claimed.rowCount ?? 0) === 0) {
+    // 別のイベントが先に確定させた。監査ログも通知も重ねない。
+    return;
+  }
 
   if (!isFullRefund) return;
 
   // ★返金したのに掲載が続く状態を作らない。★
-  await transitionListing(db, {
+  const suspended = await transitionListing(db, {
     listingId: payment.listingId,
     to: "suspended",
     actor: "system",
@@ -750,8 +836,37 @@ async function handleRefundEvent(options: {
     metadata: { refundedAmountJpy: refundedAmount },
   });
 
-  logger.warn("listing suspended after full refund", {
+  /*
+   * ★止めていないのに「止めた」と書かない。★
+   *
+   * expectedFrom が合わないと transitionListing は例外を投げず
+   * changed:false を返す。以前はこの戻り値を見ずに
+   * 「listing suspended after full refund」を必ず出していたので、
+   * ★公開されていない投稿の返金でも「停止した」と記録されていた。★
+   * 実際に、下書きの投稿で2回そう出た（2026-08-16、preview）。
+   * 運用でログを見る人が、止まっていないものを止まったと読む。
+   */
+  if (suspended.changed) {
+    logger.warn("listing suspended after full refund", {
+      listingId: payment.listingId,
+    });
+    return;
+  }
+
+  if (suspended.from === "suspended" || suspended.from === "deleted") {
+    // すでに止まっている・消えている。返金と矛盾しない。
+    return;
+  }
+
+  /*
+   * 公開前（下書き・決済待ち・確認中）の返金。掲載は出ていないので
+   * 実害は無いが、この後に支払い成立の通知が来ると公開されうる。
+   * その経路は handleSessionSucceeded 側で塞いである。
+   * ★記録は残す。★ 返金と掲載の状態が食い違う唯一の入口なので。
+   */
+  logger.warn("refund on a listing that was not published", {
     listingId: payment.listingId,
+    listingStatus: suspended.from,
   });
 }
 
@@ -774,7 +889,7 @@ async function handleDispute(options: {
     .set({ status: "disputed", updatedAt: new Date() })
     .where(eq(payments.id, payment.id));
 
-  await transitionListing(db, {
+  const suspended = await transitionListing(db, {
     listingId: payment.listingId,
     to: "suspended",
     actor: "system",
@@ -788,6 +903,25 @@ async function handleDispute(options: {
     targetType: "listing",
     targetId: payment.listingId,
   });
+
+  /*
+   * ★止められなかったことを黙って流さない。★
+   * 申し立ては入金ごと取り上げられる話なので、掲載が残っているかどうかは
+   * 必ず分かるようにする。expectedFrom が合わないと transitionListing は
+   * 例外を投げず changed:false を返すだけなので、見ないと素通りする。
+   * （返金・公開で同じ穴を踏んでいる。2026-08-16）
+   */
+  if (suspended.changed) {
+    options.logger.warn("listing suspended after dispute", {
+      listingId: payment.listingId,
+    });
+  } else if (suspended.from !== "suspended" && suspended.from !== "deleted") {
+    options.logger.error(
+      "dispute could not stop the listing",
+      new Error("suspend transition did not apply"),
+      { listingId: payment.listingId, listingStatus: suspended.from },
+    );
+  }
 }
 
 // ── 管理画面からの返金 ────────────────────────────────────────────

@@ -50,6 +50,13 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     logger: context.logger,
     event,
     rawPayload: payload,
+    /*
+     * ★通知メールを応答の外へ出す。★ 決済の成否には関係ない処理で、
+     * これを待つために応答が平均2.7秒かかっていた（Stripe の画面で実測）。
+     * 決済事業者は応答が遅いと再送する。速いほうが二重処理も起きにくい。
+     * DB の後始末は defer に預けたものが終わってから行われる。
+     */
+    defer: context.defer,
   });
 
   // ★処理に失敗しても 200 を返す。★ 500 を返すと Stripe が再送し続けるが、

@@ -17,8 +17,20 @@ import type { Logger } from "./logger.server.ts";
  */
 export interface AppContext {
   readonly env: AppEnv;
-  /** Workers の ExecutionContext。waitUntil に使う */
+  /** Workers の ExecutionContext。DB を触らない後処理にだけ使う */
   readonly ctx: ExecutionContext;
+  /**
+   * 応答を返したあとに続ける処理を預ける。
+   *
+   * ★DB を触る後処理は必ずこちらへ。★ `ctx.waitUntil` を直接使うと、
+   * 同じく waitUntil で走る接続の後始末（dispose）と競合して、
+   * ★DB が閉じたあとにクエリを投げることがある。★
+   * ローカルでは再現せず、本番で時々失敗する形になる。
+   * defer に預けたものが全部片づいてから接続を畳む。
+   *
+   * 失敗しても応答には影響しない。中で必ず捕まえること。
+   */
+  readonly defer: (promise: Promise<unknown>) => void;
   /**
    * DB クライアント。★リクエストごとに作られる。★
    * 呼ばれて初めて接続を張るので、DB を使わない画面では作られない。
