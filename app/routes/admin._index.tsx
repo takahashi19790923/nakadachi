@@ -6,6 +6,7 @@ import { requireAdminGate } from "~/server/guards.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
 import { countOpenReports } from "~/server/repositories/moderation-repository.server";
 import { countListingsByStatus } from "~/server/services/listing-service.server";
+import { countFailedWebhookEvents } from "~/server/services/payment/payment-service.server";
 import type { Route } from "./+types/admin._index";
 import { getApp } from "~/server/app-context";
 
@@ -14,13 +15,15 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
   await requireAdminGate({ request, context });
   const db = context.getDb();
 
-  const [listingCounts, userCount, openReports] = await Promise.all([
-    countListingsByStatus(db),
-    countUsers(db),
-    countOpenReports(db),
-  ]);
+  const [listingCounts, userCount, openReports, failedWebhooks] =
+    await Promise.all([
+      countListingsByStatus(db),
+      countUsers(db),
+      countOpenReports(db),
+      countFailedWebhookEvents(db),
+    ]);
 
-  return { listingCounts, userCount, openReports };
+  return { listingCounts, userCount, openReports, failedWebhooks };
 }
 
 export function meta(): Route.MetaDescriptors {
@@ -37,11 +40,27 @@ const ADMIN_LINKS = [
 ];
 
 export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
-  const { listingCounts, userCount, openReports } = loaderData;
+  const { listingCounts, userCount, openReports, failedWebhooks } = loaderData;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
       <h1 className="text-2xl font-bold text-washi-900">管理者ダッシュボード</h1>
+
+      {/*
+        ★決済の取りこぼしを、必ず人の目に触れる場所へ出す。★
+        失敗した Webhook には Stripe へ 200 を返しているので、決済事業者の
+        画面では成功に見える。ここに出さないと「110円は受け取ったが
+        掲載が出ていない」が誰にも分からないまま残る。
+      */}
+      {failedWebhooks > 0 ? (
+        <p className="mt-4 rounded-lg border-2 border-kaki-500 bg-kaki-50 p-4 font-bold text-kaki-900">
+          処理できなかった決済通知が {failedWebhooks} 件あります。
+          支払い済みなのに公開されていない投稿がある可能性があります。
+          <Link to="/admin/payments" className="link ml-2">
+            決済状況を確認する
+          </Link>
+        </p>
+      ) : null}
 
       {openReports > 0 ? (
         <p className="mt-4 rounded-lg border border-kaki-300 bg-kaki-50 p-4 text-kaki-900">

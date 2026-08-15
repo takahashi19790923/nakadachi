@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 
 import { listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
 import {
@@ -21,6 +21,7 @@ import {
 import {
   createCheckoutSession,
   createRefund,
+  expireCheckoutSession,
   type StripeEvent,
 } from "./stripe-client.server.ts";
 
@@ -100,11 +101,23 @@ export async function startListingCheckout(options: {
     });
   }
 
+  // やり直しのとき無効にする、前回ぶんの決済。無効化は下で行う。
+  const stripeSecretKey = requireSecret(env, "STRIPE_SECRET_KEY");
+  const openPayments = await db
+    .select({ id: payments.id, checkoutSessionId: payments.checkoutSessionId })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.listingId, listingId),
+        inArray(payments.status, ["created", "pending"]),
+      ),
+    );
+
   const paymentId = ulid();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
 
   const session = await createCheckoutSession({
-    secretKey: requireSecret(env, "STRIPE_SECRET_KEY"),
+    secretKey: stripeSecretKey,
     // ★ここが金額の唯一の出どころ。★
     amountJpy: LISTING_FEE_JPY,
     currency: LISTING_FEE_CURRENCY,
@@ -147,11 +160,63 @@ export async function startListingCheckout(options: {
     status: "created",
   });
 
-  await transitionListing(db, {
-    listingId,
-    to: "payment_pending",
-    actor: "owner",
-  });
+  /*
+   * ★前の Session を無効にするのは、新しい決済記録を入れたあと。★
+   *
+   * 無効にしないと、決済リンクが2本とも生きたままになる。
+   * ★二重課金は返金では帳消しにならない。★ 利用者の明細には2回残るし、
+   * こちらのエラーにも Stripe のエラーにも出ないので誰も気づけない。
+   *
+   * ★順番が肝。★ /expire を呼ぶと Stripe は checkout.session.expired を
+   * ただちに送ってくる。実測220ミリ秒で戻ってきた（2026-08-16、preview）。
+   * 先に無効化すると、この通知が新しい決済記録を入れるより早く着き、
+   * handleSessionFailed が「決済が失効した」と判断して投稿を下書きへ戻す。
+   * 払っている本人に「お支払いを確認できませんでした」が届く。
+   * 新しい記録を先に入れておけば、あちらは追い越された通知だと分かる。
+   *
+   * 無効化に失敗しても決済の開始は止めない。ここで止めると
+   * 「一度やめると二度と払えない投稿」ができる。
+   */
+  for (const open of openPayments) {
+    try {
+      await expireCheckoutSession({
+        secretKey: stripeSecretKey,
+        sessionId: open.checkoutSessionId,
+      });
+    } catch (error) {
+      // 支払い済み・期限切れなら Stripe が 400 を返す。無効にする対象が
+      // 無いだけなので進める。
+      logger.warn("failed to expire previous checkout session", {
+        listingId,
+        paymentId: open.id,
+        detail: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+      });
+    }
+    await db
+      .update(payments)
+      .set({ status: "expired" })
+      .where(eq(payments.id, open.id));
+  }
+
+  /*
+   * ★すでに payment_pending なら遷移させない。★
+   *
+   * 遷移表に payment_pending → payment_pending は無い（意図的。状態が
+   * 変わらない「遷移」を通すと、遷移表が守っているものが緩む）。
+   * ここを無条件に呼ぶと、決済をやめて戻ってきた人が
+   * ★もう一度ボタンを押した瞬間に必ず失敗する。★ しかも Session と
+   * payments 行を作った後で落ちるので、押すたびに捨て子が増える。
+   * 実際に踏んだ（2026-08-16、preview）。
+   * 状態が payment_pending へ戻るまでは checkout.session.expired 待ちで、
+   * 最長60分そのまま。「なぜか払えない投稿」になる。
+   */
+  if (listing.status === "draft") {
+    await transitionListing(db, {
+      listingId,
+      to: "payment_pending",
+      actor: "owner",
+    });
+  }
 
   await writeAuditLog(db, env, {
     action: "payment.checkout_started",
@@ -388,6 +453,7 @@ async function handleSessionSucceeded(options: {
 
   // ★決済記録と公開を同じトランザクションで更新する。★
   // 片方だけ成立すると「課金したのに公開されない」「無料で公開された」になる。
+  let published = false;
   await db.transaction(async (tx) => {
     await tx
       .update(payments)
@@ -399,28 +465,64 @@ async function handleSessionSucceeded(options: {
       })
       .where(eq(payments.id, payment.id));
 
-    // expectedFrom を渡すので、同じイベントが同時に2つ来ても1回しか成立しない。
-    const result = await transitionListing(tx, {
-      listingId: payment.listingId,
-      to: "published",
-      actor: "system",
-      durationDays: Number.isFinite(durationDays) ? durationDays : undefined,
-      expectedFrom: "payment_pending",
-      tx,
-    });
-
-    if (!result.changed) {
-      // payment_processing 経由（後払い）だった場合はこちらで成立する。
-      await transitionListing(tx, {
+    /*
+     * ★どこから公開できたかを必ず確かめる。★
+     *
+     * expectedFrom を渡すのは、同じイベントが同時に2つ来ても1回しか
+     * 成立させないため。ただし expectedFrom が合わないと
+     * transitionListing は例外を投げず changed:false を返すだけなので、
+     * ★戻り値を見ないと「公開したつもりで公開していない」が素通りする。★
+     * 実際に踏んだ（2026-08-16、preview）。110円は取れていて、ログは
+     * 「listing published after payment」、利用者には公開通知メール、
+     * それでも掲載は下書きのまま。どこにも異常が出ない。
+     *
+     * draft を候補に入れているのは、決済のやり直しで前の Session を
+     * 失効させたとき、その checkout.session.expired が新しい決済の最中に
+     * 届いて投稿を下書きへ戻すことがあるため（下の handleSessionFailed で
+     * 防いではいるが、届く順序は決済事業者側の都合で決まる）。
+     * ★お金を受け取った以上、掲載は必ず出す。★
+     */
+    for (const from of ["payment_pending", "payment_processing", "draft"] as const) {
+      const result = await transitionListing(tx, {
         listingId: payment.listingId,
         to: "published",
-        actor: "system",
+        // ★ここだけが payment を渡してよい場所。★ 金額・通貨・metadata の
+        // 照合を終えた、署名検証済み Webhook の支払い成立処理。
+        actor: "payment",
         durationDays: Number.isFinite(durationDays) ? durationDays : undefined,
-        expectedFrom: "payment_processing",
+        expectedFrom: from,
         tx,
       });
+      if (result.changed) {
+        published = true;
+        break;
+      }
+      // すでに公開済みなら、同じ決済が二重に届いただけ。成立とみなす。
+      if (result.from === "published") {
+        published = true;
+        break;
+      }
     }
   });
+
+  if (!published) {
+    /*
+     * 決済は成立したのに掲載を出せなかった。★黙って終わらせない。★
+     * 例外にして Webhook を失敗で返すと Stripe が再送してくれる。
+     * 公開通知メールもここで止まる（出していない掲載を
+     * 「公開しました」と知らせない）。
+     */
+    logger.error(
+      "payment succeeded but listing was not published",
+      new Error("publish transition did not apply"),
+      { listingId: payment.listingId, paymentId: payment.id },
+    );
+    throw new AppError(
+      "conflict",
+      "掲載の公開に失敗しました。",
+      { detail: `paid but not published: listing=${payment.listingId}` },
+    );
+  }
 
   await writeAuditLog(db, env, {
     action: "payment.succeeded",
@@ -520,6 +622,41 @@ async function handleSessionFailed(
       updatedAt: new Date(),
     })
     .where(eq(payments.id, payment.id));
+
+  /*
+   * ★追い越された失効通知で、進行中の決済を壊さない。★
+   *
+   * 決済をやめて戻ってきた人がもう一度押すと、こちらは前の Session を
+   * 失効させてから新しい Session を作る。すると Stripe は
+   * checkout.session.expired をすぐ送ってくる。これが
+   * ★新しい決済の最中に届く。★（実測220ms、2026-08-16 preview）
+   *
+   * そのまま処理すると、いま払おうとしている投稿が下書きへ戻り、
+   * 「お支払いを確認できませんでした」というメールまで届く。
+   * 払っている本人にこれが出る。
+   *
+   * この投稿に、この決済より新しい決済記録があるなら、それは
+   * 追い越された古い通知。決済記録の状態だけ直して投稿には触らない。
+   */
+  const newer = await db
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.listingId, payment.listingId),
+        gt(payments.id, payment.id),
+      ),
+    )
+    .limit(1);
+
+  if (newer.length > 0) {
+    options.logger.info("ignored superseded checkout failure", {
+      listingId: payment.listingId,
+      paymentId: payment.id,
+      reason,
+    });
+    return;
+  }
 
   for (const from of ["payment_pending", "payment_processing"] as const) {
     const result = await transitionListing(db, {
@@ -748,4 +885,24 @@ export async function getPaymentStateForListing(
     .orderBy(desc(payments.createdAt))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * 処理に失敗した Webhook の件数。
+ *
+ * ★失敗しても Stripe には 200 を返している。★ 同じ入力なら再送しても
+ * 同じ失敗になるので、再送させ続けても意味がないという判断で、
+ * 記録だけ残して 200 を返す設計にしてある（handleStripeEvent の catch）。
+ *
+ * ★その代わり、誰かが必ず見る場所に出す。★ ここを出さないと
+ * 「110円は受け取ったが掲載が出ていない」が完全に不可視になる。
+ * Stripe の画面では成功、こちらのログは流れて消える、利用者には
+ * 何も届かない。実際にその状態を作ってしまった（2026-08-16）。
+ */
+export async function countFailedWebhookEvents(db: Db): Promise<number> {
+  const rows = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(paymentWebhookEvents)
+    .where(eq(paymentWebhookEvents.status, "failed"));
+  return rows[0]?.count ?? 0;
 }
