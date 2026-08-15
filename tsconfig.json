@@ -42,7 +42,12 @@
 		"noEmit": true,
 
 		"rootDirs": [".", "./.react-router/types"],
-		"baseUrl": ".",
+		/*
+		 * ★baseUrl は書かない。★ TypeScript 6 で非推奨、7 で動かなくなる。
+		 * paths は tsconfig.json のある場所からの相対で解決されるので、
+		 * baseUrl が無くても "./app/*" はこのファイルの隣の app/ を指す。
+		 * "ignoreDeprecations" で警告を黙らせると、7 に上げた日に壊れる。
+		 */
 		"paths": {
 			"~/*": ["./app/*"]
 		}
