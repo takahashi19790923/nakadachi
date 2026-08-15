@@ -92,9 +92,20 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
       <h1 className="text-2xl font-bold text-washi-900">投稿内容の確認</h1>
 
+      {/*
+        ★「下書きのまま」と書かない。★ 決済をやめて戻ってきた時点では、
+        投稿の状態は payment_pending で、すぐ下のバッジには「決済待ち」と出る。
+        文言とバッジが食い違うと、料金がどうなったのか読み手が判断できない。
+        伝えるべきは状態の名前ではなく「請求されていない」ことのほう。
+      */}
       {canceled ? (
         <p className="mt-4 rounded-lg border border-washi-300 bg-washi-100 p-4 text-washi-800">
-          お支払いは行われていません。投稿は下書きのまま残っています。
+          お支払いは行われていません。料金は請求されていません。
+          このままもう一度お支払いに進むこともできますし、あとから
+          <Link to="/mypage/drafts" className="link mx-1">
+            下書き一覧
+          </Link>
+          でやり直すこともできます。
         </p>
       ) : null}
 

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// 検証エラーの既定文言を日本語にする。消すと画面に "Invalid input" と出る。
+import "./zod-setup";
+
 import { CATEGORY_SLUGS, LISTING_KINDS } from "../categories";
 import { emailSchema, trimmedString, ulidSchema } from "./common";
 
