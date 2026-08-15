@@ -99,13 +99,33 @@ async function callStripe<T>(options: {
 
   // ★応答本文を必ず読み切る。★ 読まずに return すると接続が開いたままになる。
   const payload = (await response.json().catch(() => null)) as
-    | (T & { error?: { message?: string; code?: string; type?: string } })
+    | (T & {
+        error?: {
+          message?: string;
+          code?: string;
+          type?: string;
+          param?: string;
+        };
+      })
     | null;
 
   if (!response.ok || !payload) {
-    // ★事業者の生メッセージを利用者へ出さない。★ ログにだけ残す。
+    /*
+     * ★message と param を必ず残す。★
+     * 以前は status / code / type だけを記録していた。Stripe が
+     * パラメータ不備で 400 を返すとき code は付かないことが多く、
+     * ログに "code=unknown type=invalid_request_error" とだけ出て、
+     * 何が悪いのか一切分からなかった（実際に詰まった）。
+     * どの項目が問題かは param に、理由は message に入っている。
+     *
+     * ★この文字列は AppError の detail に入る。★ detail は運用者向けで、
+     * 画面には出ない。利用者に見えるのは別の定型文。
+     */
+    const e = payload?.error;
     throw new StripeApiError(
-      `stripe ${options.path} failed: status=${response.status} code=${payload?.error?.code ?? "unknown"} type=${payload?.error?.type ?? "unknown"}`,
+      `stripe ${options.path} failed: status=${response.status}` +
+        ` type=${e?.type ?? "unknown"} code=${e?.code ?? "unknown"}` +
+        ` param=${e?.param ?? "-"} message=${(e?.message ?? "(無し)").slice(0, 200)}`,
     );
   }
   return payload;
@@ -145,6 +165,23 @@ export async function createCheckoutSession(options: {
     body: {
       mode: "payment",
       locale: "ja",
+      /*
+       * ★Managed Payments を明示的に切る。★
+       *
+       * 有効のままだと Stripe が販売者（Merchant of Record）になり、
+       * 消費税の納税義務も Stripe 側へ移る。このサービスは
+       * 「取引の当事者ではない、場を提供するだけ」と規約に書いており、
+       * 特商法の表記でも自社を販売事業者としている。実態と食い違う。
+       *
+       * ★新しい Stripe アカウントは既定で ON。★ ON のまま作ろうとすると
+       *   Invalid line_items[0]: the product tax code is missing
+       * で 400 になる。ここで税コードを足すとエラーは消えるが、
+       * ★MoR は Stripe のままなので回避になっていない。★
+       *
+       * アカウント設定側でも切ること（設定 → Managed Payments → 無効にする）。
+       * 二重に切る。設定を戻されてもここで止まる。
+       */
+      managed_payments: { enabled: false },
       success_url: options.successUrl,
       cancel_url: options.cancelUrl,
       client_reference_id: options.clientReferenceId,
@@ -183,6 +220,27 @@ export async function retrieveCheckoutSession(options: {
     secretKey: options.secretKey,
     path: `/checkout/sessions/${encodeURIComponent(options.sessionId)}`,
     method: "GET",
+  });
+}
+
+/**
+ * まだ支払われていない Checkout Session を、期限前に無効にする。
+ *
+ * ★同じ投稿に生きた決済リンクを2本作らない。★ 決済をやめて戻ってきた人が
+ * もう一度ボタンを押すと新しい Session ができる。古いほうを残すと、
+ * 両方の URL が有効なあいだに二重に払える。二重課金は返金では帳消しにならない
+ * （利用者の明細には2回出るし、こちらは気づけない）。
+ *
+ * 支払い済み・期限切れの Session に対しては Stripe が 400 を返す。
+ * それは「もう無効にする対象が無い」という意味なので、呼び出し側で握りつぶす。
+ */
+export async function expireCheckoutSession(options: {
+  secretKey: string;
+  sessionId: string;
+}): Promise<void> {
+  await callStripe<CheckoutSession>({
+    secretKey: options.secretKey,
+    path: `/checkout/sessions/${encodeURIComponent(options.sessionId)}/expire`,
   });
 }
 

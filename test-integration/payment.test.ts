@@ -1,11 +1,14 @@
 import { eq } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
 import { LISTING_FEE_JPY } from "~/domain/pricing";
 import { ulid } from "~/domain/ulid";
 import type { Db } from "~/server/db.server";
-import { handleStripeEvent } from "~/server/services/payment/payment-service.server";
+import {
+  handleStripeEvent,
+  startListingCheckout,
+} from "~/server/services/payment/payment-service.server";
 import type { StripeEvent } from "~/server/services/payment/stripe-client.server";
 import {
   closeTestDb,
@@ -428,5 +431,239 @@ describe("知らないイベント", () => {
     const row = rows[0]!;
     expect(row.payloadDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(row)).not.toContain("secret@example.test");
+  });
+});
+
+/**
+ * 決済のやり直し。
+ *
+ * ★Stripe への呼び出しだけ差し替える。★ DB は本物を使う。ここで見たいのは
+ * 「どの状態から何回押しても払える」ことと、そのとき生きた決済リンクが
+ * 1本だけになることで、どちらも DB の中身でしか確かめられない。
+ */
+describe("★決済をやめて戻ってきた人がもう一度払える★", () => {
+  let calls: { path: string; method: string }[] = [];
+  let sessionSeq = 0;
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    calls = [];
+    sessionSeq = 0;
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
+
+    globalThis.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = url.replace("https://api.stripe.com/v1", "");
+      calls.push({ path, method: init?.method ?? "GET" });
+
+      if (path.endsWith("/expire")) {
+        return Promise.resolve(json({ id: "cs_expired", status: "expired" }));
+      }
+      sessionSeq += 1;
+      return Promise.resolve(
+        json({
+          id: `cs_test_retry_${sessionSeq}`,
+          url: `https://checkout.stripe.com/c/pay/cs_test_retry_${sessionSeq}`,
+          payment_status: "unpaid",
+          status: "open",
+        }),
+      );
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  async function start(id: string) {
+    return startListingCheckout({
+      db,
+      env,
+      logger: testLogger,
+      request: new Request("https://example.test/checkout", { method: "POST" }),
+      listingId: id,
+      userId,
+      durationDays: 30,
+    });
+  }
+
+  it("payment_pending から押しても失敗しない", async () => {
+    // ★これが本題。★ 以前は遷移表に payment_pending → payment_pending が
+    // 無いため、2回目のボタンが必ず失敗した。しかも Stripe の Session と
+    // payments 行を作った後で落ちるので、押すたびに捨て子が増えていた。
+    const draftId = await makeDraft(db, userId, { status: "draft" });
+
+    const first = await start(draftId);
+    expect(first.redirectUrl).toContain("checkout.stripe.com");
+    expect(await statusOf(draftId)).toBe("payment_pending");
+
+    const second = await start(draftId);
+    expect(second.redirectUrl).toContain("checkout.stripe.com");
+    expect(await statusOf(draftId)).toBe("payment_pending");
+    expect(second.paymentId).not.toBe(first.paymentId);
+  });
+
+  it("★生きた決済リンクは常に1本だけ★", async () => {
+    // 2本残ると、両方の URL で払えて二重課金になる。返金しても
+    // 利用者の明細には2回残るし、こちらのエラーには一切出ない。
+    const draftId = await makeDraft(db, userId, { status: "draft" });
+
+    const first = await start(draftId);
+    await start(draftId);
+
+    const rows = await db
+      .select({ id: payments.id, status: payments.status })
+      .from(payments)
+      .where(eq(payments.listingId, draftId));
+
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.id === first.paymentId)?.status).toBe("expired");
+    expect(rows.filter((r) => r.status === "created")).toHaveLength(1);
+
+    // 古い Session を Stripe 側でも無効にしていること。
+    expect(calls.some((c) => c.path.endsWith("/expire"))).toBe(true);
+
+    /*
+     * ★無効化は、新しい Session を作ったあとに呼ぶこと。★
+     * /expire を呼ぶと Stripe は checkout.session.expired をただちに
+     * 送り返してくる（実測220ms）。先に呼ぶと、その通知が新しい決済記録より
+     * 早く着き、いま払おうとしている投稿が下書きへ戻る。
+     * 払っている本人に「お支払いを確認できませんでした」が届く。
+     */
+    const firstExpire = calls.findIndex((c) => c.path.endsWith("/expire"));
+    const lastCreate = calls
+      .map((c, i) => (c.path === "/checkout/sessions" ? i : -1))
+      .filter((i) => i >= 0)
+      .pop();
+    expect(lastCreate).toBeGreaterThan(-1);
+    expect(firstExpire).toBeGreaterThan(lastCreate!);
+  });
+
+  it("支払い済みなら二度と課金しない", async () => {
+    const draftId = await makeDraft(db, userId, { status: "payment_pending" });
+    await db.insert(payments).values({
+      id: ulid(),
+      listingId: draftId,
+      userId,
+      provider: "stripe",
+      checkoutSessionId: "cs_test_paid",
+      amountJpy: LISTING_FEE_JPY,
+      currency: "jpy",
+      status: "succeeded",
+    });
+
+    await expect(start(draftId)).rejects.toThrow(/すでにお支払い済み/);
+    // Stripe を一切呼んでいないこと。
+    expect(calls).toHaveLength(0);
+  });
+});
+
+/**
+ * ★お金を受け取ったのに掲載が出ない、を作らない。★
+ *
+ * 決済のやり直しで前の Session を失効させると、その
+ * checkout.session.expired が新しい決済の最中に届くことがある（実測220ms）。
+ * これで投稿が下書きへ戻ると、支払い成立の通知が来ても
+ * expectedFrom が合わず、公開されないまま「公開しました」で終わっていた。
+ */
+describe("★支払い成立と公開が食い違わない★", () => {
+  it("下書きへ戻されていても、支払い成立で公開される", async () => {
+    // 追い越された失効通知で draft へ戻った状態を作る。
+    await db
+      .update(listings)
+      .set({ status: "draft" })
+      .where(eq(listings.id, listingId));
+
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ id: "evt_draft_recovery" }),
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("processed");
+    expect(await statusOf(listingId)).toBe("published");
+    expect(await paymentStatus()).toBe("succeeded");
+  });
+
+  it("★公開できなければ失敗として返す（黙って成功にしない）★", async () => {
+    // 掲載終了からは公開できない。ここで素通りすると、110円を受け取って
+    // 「公開しました」とメールを出したのに掲載が無い状態になる。
+    await db
+      .update(listings)
+      .set({ status: "closed" })
+      .where(eq(listings.id, listingId));
+
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ id: "evt_publish_impossible" }),
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(await statusOf(listingId)).toBe("closed");
+  });
+});
+
+describe("★追い越された失効通知で決済中の投稿を壊さない★", () => {
+  it("新しい決済がある投稿は下書きへ戻さない", async () => {
+    // 進行中の（新しい）決済。ULID は時刻順に並ぶので、後から作れば必ず大きい。
+    const newerPaymentId = ulid();
+    await db.insert(payments).values({
+      id: newerPaymentId,
+      listingId,
+      userId,
+      provider: "stripe",
+      checkoutSessionId: "cs_test_newer",
+      amountJpy: LISTING_FEE_JPY,
+      currency: "jpy",
+      status: "created",
+    });
+
+    // 古いほうの Session が失効した通知が、いま届く。
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: {
+        id: "evt_superseded_expire",
+        type: "checkout.session.expired",
+        created: Math.floor(Date.now() / 1000),
+        data: { object: { id: sessionId } },
+      },
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("processed");
+    // 古い決済記録だけが失効する。
+    expect(await paymentStatus()).toBe("expired");
+    // ★投稿は決済待ちのまま。★ 下書きへ戻ると、払っている本人に
+    // 「お支払いを確認できませんでした」が届く。
+    expect(await statusOf(listingId)).toBe("payment_pending");
+  });
+
+  it("新しい決済が無ければ、これまで通り下書きへ戻す", async () => {
+    const result = await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: {
+        id: "evt_plain_expire",
+        type: "checkout.session.expired",
+        created: Math.floor(Date.now() / 1000),
+        data: { object: { id: sessionId } },
+      },
+      rawPayload: "{}",
+    });
+
+    expect(result.status).toBe("processed");
+    expect(await paymentStatus()).toBe("expired");
+    expect(await statusOf(listingId)).toBe("draft");
   });
 });

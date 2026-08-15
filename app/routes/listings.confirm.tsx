@@ -1,4 +1,5 @@
-import { Form, Link } from "react-router";
+import { useEffect } from "react";
+import { Link, useFetcher } from "react-router";
 
 import { CsrfInput } from "~/components/form";
 import { FeeNotice, StatusBadge } from "~/components/ui";
@@ -39,8 +40,43 @@ export function meta(): Route.MetaDescriptors {
   return privatePageMeta("投稿内容の確認");
 }
 
+/** /listings/:id/checkout の action が返すもの */
+interface CheckoutActionData {
+  readonly redirectUrl?: string;
+  readonly message?: string | null;
+}
+
 export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
   const { listing, csrfToken, canceled } = loaderData;
+  const fetcher = useFetcher<CheckoutActionData>();
+
+  /*
+   * ★決済画面へは、ここから window.location.assign で移動する。★
+   *
+   * 遠回りに見えるが、他の書き方が全部だめだった。実機で順に踏んだ。
+   *
+   *  1. action で redirect(stripeのURL) を返す
+   *     → <Form> の fetch が 302 を透過的に追ってしまい、クライアントには
+   *       何も伝わらない。★ボタンを押しても無反応。★例外もログも出ない。
+   *  2. <Form reloadDocument> で素のフォーム送信にする
+   *     → 文書遷移の POST は origin ヘッダが null になることがあり、
+   *       React Router が forwarded action request と見なして中断する。
+   *       画面には素の Bad Request だけが出る。
+   *  3. 通常の <Form> で action からURLを返し、/checkout の画面で移動する
+   *     → action の後の再検証で /checkout の loader が走る。あの loader は
+   *       GET を confirm へ戻すために redirect を投げるので、
+   *       ★移動する画面が描画される前に confirm へ戻される。★
+   *
+   * fetcher なら画面遷移が起きないので、loader の再検証も起きない。
+   * 受け取った URL でそのまま移動する。
+   */
+  const redirectUrl = fetcher.data?.redirectUrl;
+  useEffect(() => {
+    if (redirectUrl) window.location.assign(redirectUrl);
+  }, [redirectUrl]);
+
+  // 送信中と、移動待ちのあいだはボタンを止める。連打で Session が増える。
+  const submitting = fetcher.state !== "idle" || Boolean(redirectUrl);
   const category = CATEGORIES[listing.categorySlug];
   const price = formatListingPrice({
     categorySlug: listing.categorySlug,
@@ -112,7 +148,11 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
         <>
           <FeeNotice />
 
-          <Form method="post" action={`/listings/${listing.id}/checkout`} className="mt-6">
+          <fetcher.Form
+            method="post"
+            action={`/listings/${listing.id}/checkout`}
+            className="mt-6"
+          >
             <CsrfInput token={csrfToken} />
             <input type="hidden" name="durationDays" value="30" />
 
@@ -124,10 +164,39 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
               お支払いが確認できた時点で投稿が公開されます。
             </p>
 
-            <button type="submit" className="btn btn-accent mt-4 w-full">
-              {formatJpy(LISTING_FEE_JPY)}を支払って公開する
+            {fetcher.data?.message ? (
+              <p className="mt-4 rounded-lg border border-kaki-300 bg-kaki-50 p-3 text-kaki-900">
+                {fetcher.data.message}
+              </p>
+            ) : null}
+
+            <button
+              type="submit"
+              className="btn btn-accent mt-4 w-full"
+              disabled={submitting}
+            >
+              {redirectUrl
+                ? "お支払い画面へ移動しています…"
+                : fetcher.state !== "idle"
+                  ? "準備しています…"
+                  : `${formatJpy(LISTING_FEE_JPY)}を支払って公開する`}
             </button>
-          </Form>
+          </fetcher.Form>
+
+          {/*
+            ★JavaScript で移動できなかったときの逃げ道。★
+            ここが無いと、移動に失敗した人は「押したのに何も起きない」まま
+            取り残される。決済は取りこぼしが直接お金になるので、必ず残す。
+          */}
+          {redirectUrl ? (
+            <p className="mt-3 text-sm text-washi-700">
+              切り替わらない場合は
+              <a href={redirectUrl} className="link mx-1">
+                こちらからお支払いへ進んでください
+              </a>
+              。
+            </p>
+          ) : null}
 
           <p className="mt-4 text-sm text-washi-600">
             公開せずにやめる場合は、このまま画面を離れてください。下書きは

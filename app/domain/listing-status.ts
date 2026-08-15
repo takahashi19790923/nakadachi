@@ -33,7 +33,19 @@ export const LISTING_STATUSES = [
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
 
 /** 誰による遷移か。API から呼ぶときに必ず渡す */
-export type TransitionActor = "owner" | "system" | "admin";
+/**
+ * 誰がその遷移を起こしたか。
+ *
+ * ★payment を system から分けている理由。★
+ * 公開できるのは「支払いが成立した」と確認できた経路だけ、という
+ * 決まりを表そのものに書くため。system をそのまま使うと、期限切れの
+ * 取り込みや返金処理と同じ資格になり、★あとから足したサーバー処理が
+ * 課金を通さずに公開できてしまう。★ 呼び出し箇所の少なさで守っている
+ * うちは、増えた日に気づけない。
+ *
+ * payment を渡してよいのは、署名検証済み Webhook の支払い成立処理だけ。
+ */
+export type TransitionActor = "owner" | "system" | "admin" | "payment";
 
 /**
  * 許可された遷移だけを列挙する。ここに無い組み合わせはすべて拒否。
@@ -47,12 +59,27 @@ const ALLOWED: Readonly<
 > = {
   draft: {
     payment_pending: ["owner"],
+    /*
+     * ★payment だけ。owner も admin も system も入れない。★
+     *
+     * 通常は payment_pending を経由する。ここが要るのは、支払いの成立と
+     * 決済の失効が前後して届いたとき。失効の通知が先に着くと投稿は
+     * 下書きへ戻り、そのあとに支払い成立が届く。届く順序は決済事業者側の
+     * 都合で決まるので、こちらでは防ぎきれない。
+     * ここが無いと ★110円を受け取ったのに掲載が出ない。★ 実際に踏んだ
+     * （2026-08-16、preview）。
+     *
+     * 「課金を飛ばして公開できない」は、この表と payment という資格の
+     * 組み合わせで守る。payment を渡すのは、金額・通貨・metadata を
+     * 照合し終えた支払い成立処理だけ。
+     */
+    published: ["payment"],
     deleted: ["owner", "admin"],
   },
   payment_pending: {
     // カード決済は checkout.session.completed が payment_status=paid で届くので
     // ここから直接 published へ進む。
-    published: ["system"],
+    published: ["payment"],
     // コンビニ・銀行振込など後払いの手段は確認中を挟む。
     payment_processing: ["system"],
     // 利用者が決済をやめた／Session が失効した場合は下書きへ戻す。再課金は発生しない。
@@ -61,7 +88,7 @@ const ALLOWED: Readonly<
     deleted: ["owner", "admin"],
   },
   payment_processing: {
-    published: ["system"],
+    published: ["payment"],
     // 決済失敗。もう一度やり直せる状態へ戻す。
     payment_pending: ["system"],
     draft: ["system"],
