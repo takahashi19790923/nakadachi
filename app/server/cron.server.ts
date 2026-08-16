@@ -9,6 +9,14 @@ import { purgeDueAccounts } from "./services/erasure-service.server.ts";
 import { expireDueListings } from "./services/listing-service.server.ts";
 import { purgeDeletedImages } from "./services/media/media-service.server.ts";
 import { notifyExpiringListings } from "./services/notification-service.server.ts";
+import {
+  markEndedListingImages,
+  purgeEndedListings,
+  purgeOldEmailLogs,
+  purgeOldPayments,
+  purgeOldWebhookEvents,
+  purgeResolvedReports,
+} from "./services/retention-service.server.ts";
 
 /**
  * 定期処理。
@@ -86,10 +94,41 @@ async function runDaily(context: TaskContext): Promise<CronResult> {
     purgeExpiredAccessRecords(db),
   );
 
-  // 退会で削除待ちに入った画像を R2 から実際に消す。
+  /*
+   * ここから保持期間の掃除。★順番が命。★
+   *
+   * 掲載を消すと listing_images は連鎖削除されるが、R2 のオブジェクトは
+   * 消えない。行だけ消えて実体が残ると、どこからも参照されない課金対象が
+   * 永久に残り、誰も気づけない。
+   *
+   *   ① 終わって90日の掲載の写真に削除待ちの印をつける
+   *   ② 削除待ちの写真を R2 から消す（退会ぶんもここで消える）
+   *   ③ 写真が1枚も残っていない掲載だけを消す（180日）
+   *
+   * ③に「写真が残っていないこと」を条件として入れてあるので、
+   * ①②が落ちた日は③も自動的に見送られる。
+   */
+  await runTask("markEndedImages", logger, result, () =>
+    markEndedListingImages(db),
+  );
+
   await runTask("purgeDeletedImages", logger, result, () =>
     purgeDeletedImages({ db, env, logger }),
   );
+
+  await runTask("purgeEndedListings", logger, result, () =>
+    purgeEndedListings(db),
+  );
+
+  await runTask("purgeWebhookEvents", logger, result, () =>
+    purgeOldWebhookEvents(db),
+  );
+  await runTask("purgeEmailLogs", logger, result, () => purgeOldEmailLogs(db));
+  await runTask("purgeResolvedReports", logger, result, () =>
+    purgeResolvedReports(db),
+  );
+  // 帳簿として7年。ここを短くしない。
+  await runTask("purgeOldPayments", logger, result, () => purgeOldPayments(db));
 
   await runTask("notifyExpiring", logger, result, () =>
     notifyExpiringListings({ db, env, logger }),

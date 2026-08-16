@@ -288,14 +288,33 @@ describe("★定期処理が入口から実際に走る★", () => {
 
     // 日次で回すものが全部呼ばれていること（増減したら気づけるように）。
     expect(Object.keys(result).sort()).toEqual([
+      "markEndedImages",
       "notifyExpiring",
       "purgeAccessRecords",
       "purgeAccounts",
       "purgeDeletedImages",
+      "purgeEmailLogs",
+      "purgeEndedListings",
+      "purgeOldPayments",
       "purgeRateLimits",
+      "purgeResolvedReports",
       "purgeSessions",
       "purgeTokens",
+      "purgeWebhookEvents",
     ]);
+
+    /*
+     * ★写真の掃除は掲載の削除より先に走ること。★ 逆だと listing_images が
+     * 連鎖削除され、R2 の実体だけが取り残される（課金対象が永久に残る）。
+     * 並び順そのものを検査しておく。
+     */
+    const order = Object.keys(result);
+    expect(order.indexOf("markEndedImages")).toBeLessThan(
+      order.indexOf("purgeDeletedImages"),
+    );
+    expect(order.indexOf("purgeDeletedImages")).toBeLessThan(
+      order.indexOf("purgeEndedListings"),
+    );
   });
 
   it("1時間ごとでは掲載期限の反映だけを行う", async () => {
