@@ -13,6 +13,13 @@ import { ConfigurationError } from "./errors.ts";
 export interface AppEnv {
   // ── binding ────────────────────────────────────────────────
   MEDIA: R2Bucket;
+  /**
+   * DB の書き出し先。★写真とは別のバケット。★
+   * 中身は利用者の投稿・メッセージ・暗号化済みメールアドレス・決済記録を
+   * 含む完全な写しなので、配信経路や掃除処理から隔離しておく。
+   * テストや定期処理以外の場所から触らないこと。
+   */
+  BACKUPS?: R2Bucket;
 
   // ── 公開してよい設定（wrangler.jsonc の vars）────────────────
   ENVIRONMENT: "development" | "preview" | "production";

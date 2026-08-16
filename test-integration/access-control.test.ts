@@ -407,3 +407,56 @@ describe("管理者の権限", () => {
     expect(rows[0]!.role).toBe("admin");
   });
 });
+
+/**
+ * 自分の下書きを消せること。
+ *
+ * ★UI に入口が無かった。★ 一覧には「確認して公開する／編集／写真」しか
+ * なく、作ってしまった投稿を利用者が自分で片づけられなかった。
+ * 下書きは掲載終了と違って保持期間の対象外なので、置きっぱなしのまま
+ * 永久に残る（2026-08-17 に利用者の指摘で発覚）。
+ */
+describe("★自分の下書きを削除できる★", () => {
+  it("下書きは本人が削除できる", async () => {
+    const db = await resetDatabase();
+    const owner = await makeUser(db, "draft-owner@example.test");
+    const listingId = await makeDraft(db, owner.id, { status: "draft" });
+
+    const result = await transitionListing(db, {
+      listingId,
+      to: "deleted",
+      actor: "owner",
+    });
+    expect(result.changed).toBe(true);
+  });
+
+  it("決済待ちも本人が削除できる（まだ払っていない）", async () => {
+    const db = await resetDatabase();
+    const owner = await makeUser(db, "pending-owner@example.test");
+    const listingId = await makeDraft(db, owner.id, { status: "payment_pending" });
+
+    const result = await transitionListing(db, {
+      listingId,
+      to: "deleted",
+      actor: "owner",
+    });
+    expect(result.changed).toBe(true);
+  });
+
+  it("★決済の確認中は本人でも削除できない★", async () => {
+    /*
+     * 支払いが成立するかもしれない状態。ここで消せると、
+     * 「支払い成立の通知が来たのに投稿が無い」が起きる。
+     * 画面ではボタンを出さず、理由を書いている。
+     */
+    const db = await resetDatabase();
+    const owner = await makeUser(db, "processing-owner@example.test");
+    const listingId = await makeDraft(db, owner.id, {
+      status: "payment_processing",
+    });
+
+    await expect(
+      transitionListing(db, { listingId, to: "deleted", actor: "owner" }),
+    ).rejects.toThrow();
+  });
+});
