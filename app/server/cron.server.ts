@@ -8,6 +8,10 @@ import { purgeExpiredTokens } from "./services/auth-service.server.ts";
 import { purgeDueAccounts } from "./services/erasure-service.server.ts";
 import { expireDueListings } from "./services/listing-service.server.ts";
 import { purgeDeletedImages } from "./services/media/media-service.server.ts";
+import {
+  exportDatabase,
+  pruneOldBackups,
+} from "./services/backup-service.server.ts";
 import { notifyExpiringListings } from "./services/notification-service.server.ts";
 import {
   markEndedListingImages,
@@ -43,6 +47,20 @@ export type CronResult = Record<string, number | string>;
 export const CRON_HOURLY = "0 * * * *";
 /** 日次。UTC 19:20 = JST 04:20（利用の少ない時間帯に寄せる） */
 export const CRON_DAILY = "20 19 * * *";
+/**
+ * DB を書き出す曜日（UTC）。1 = 月曜。
+ *
+ * ★曜日つきの cron トリガーは使わない。★ Cloudflare の曜日指定は
+ * 挙動が確かめられなかった。`0` は `invalid cron string` で拒否され、
+ * wrangler は `SUN` を `0` に正規化して送るので SUN も同じく通らない。
+ * 残った `1` と `7` を UTC 日曜に仕掛けて2回試したが、★どちらも発火しなかった。★
+ * （2026-08-17 実測）
+ *
+ * 動くと確かめられないバックアップは、無いより危険になる。「ある」と
+ * 思い込んで他の備えをしなくなるため。発火を実測済みの日次トリガーの中で、
+ * 曜日をこちら側で見て週1回だけ走らせる。
+ */
+const BACKUP_WEEKDAY_UTC = 1;
 
 interface TaskContext {
   db: Db;
@@ -77,10 +95,22 @@ async function runHourly(context: TaskContext): Promise<CronResult> {
   return result;
 }
 
-/** 1日1回。削除と通知 */
-async function runDaily(context: TaskContext): Promise<CronResult> {
+/** 1日1回。削除と通知、週1回はバックアップも */
+async function runDaily(
+  context: TaskContext,
+  now: Date,
+): Promise<CronResult> {
   const { db, env, logger } = context;
   const result: CronResult = {};
+
+  /*
+   * ★バックアップを先に取る。★ このあとに続くのは全部「消す」処理で、
+   * 消したあとに書き出すと、その日のバックアップからは消したものが
+   * 失われている。取り戻したいのは消える前の状態のほう。
+   */
+  if (now.getUTCDay() === BACKUP_WEEKDAY_UTC) {
+    await runBackup(context, result);
+  }
 
   // ★約束した削除を先に置く。★ 実行時間の上限に当たった場合でも、
   // 「30日で消します」「183日で消します」と書いたものが優先して走る。
@@ -144,6 +174,33 @@ async function runDaily(context: TaskContext): Promise<CronResult> {
 }
 
 /**
+ * 週1回、DB を R2 へ書き出す。日次の中から呼ぶ。
+ *
+ * ★Neon の PITR だけに頼らない。★ 無料プランの保持は24時間しかなく、
+ * 25時間前の誤操作は取り戻せない。課金が始まると、失うものが
+ * テストデータではなく利用者の投稿と決済記録になる。
+ */
+async function runBackup(
+  context: TaskContext,
+  result: CronResult,
+): Promise<void> {
+  const { db, env, logger } = context;
+
+  await runTask("exportDatabase", logger, result, async () => {
+    const exported = await exportDatabase({ db, env, logger });
+    return exported.bytes;
+  });
+
+  // ★書き出しが失敗した週は古い世代を消さない。★ 消してから失敗すると
+  // 手元に何も残らない回ができる。runTask は失敗を "failed" で返す。
+  if (result.exportDatabase !== "failed") {
+    await runTask("pruneBackups", logger, result, () =>
+      pruneOldBackups({ env, logger }),
+    );
+  }
+}
+
+/**
  * Cron Trigger の入口。
  *
  * 知らない cron 式が来たら日次を走らせる。式を足したときに
@@ -154,12 +211,17 @@ export async function runScheduledTasks(options: {
   db: Db;
   env: AppEnv;
   logger: Logger;
+  /** テストから曜日を指定するため。既定は現在時刻 */
+  now?: Date;
 }): Promise<CronResult> {
   const { cron, db, env, logger } = options;
   const context: TaskContext = { db, env, logger };
+  const now = options.now ?? new Date();
 
   const result =
-    cron === CRON_HOURLY ? await runHourly(context) : await runDaily(context);
+    cron === CRON_HOURLY
+      ? await runHourly(context)
+      : await runDaily(context, now);
 
   logger.info("cron finished", { cron, ...result });
   return result;

@@ -32,6 +32,18 @@ export default function Drafts({ loaderData }: Route.ComponentProps) {
           label: "確認して公開する",
           to: `/listings/${listing.id}/confirm`,
         })}
+        /*
+         * ★下書きを消す手段を必ず置く。★ 無いと、作ってしまった投稿を
+         * 利用者が自分で片づけられない。下書きは掲載終了と違って保持期間の
+         * 対象外なので、置きっぱなしのまま永久に残る。
+         *
+         * 消せるかどうかの判断は確認画面に任せる。一覧が持つのは要約で
+         * 状態を含まないため、ここで判断すると別の情報源が増える。
+         */
+        dangerAction={(listing) => ({
+          label: "削除",
+          to: `/listings/${listing.id}/close`,
+        })}
       />
     </div>
   );

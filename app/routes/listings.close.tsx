@@ -73,6 +73,29 @@ export default function CloseListing({
 }: Route.ComponentProps) {
   const { listingId, status, csrfToken } = loaderData;
   const canClose = status === "published" || status === "expired";
+  /*
+   * ★決済の確認中は本人でも削除できない。★ 遷移表で許していないので、
+   * 押させると必ず失敗する。押せるのに失敗するボタンは、利用者から見ると
+   * 「壊れている」としか映らない。理由を書いてボタンを出さない。
+   */
+  const canDelete = status === "draft" || status === "payment_pending";
+
+  if (!canClose && !canDelete) {
+    return (
+      <div className="mx-auto w-full max-w-md px-4 py-10">
+        <h1 className="text-2xl font-bold text-washi-900">
+          いまは削除できません
+        </h1>
+        <p className="mt-4 text-washi-700">
+          お支払いの確認中です。確認が終わってから、あらためて操作してください。
+          確認が取れなかった場合は下書きに戻ります。
+        </p>
+        <Link to="/mypage/drafts" className="btn btn-secondary mt-6">
+          下書き一覧へ戻る
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-md px-4 py-10">
@@ -86,17 +109,33 @@ export default function CloseListing({
         </p>
       ) : null}
 
-      <ul className="mt-4 list-inside list-disc space-y-1 text-washi-700">
-        <li>掲載を終了すると、検索や一覧に表示されなくなります。</li>
-        <li>
-          <strong>掲載料の返金はありません。</strong>
-        </li>
-        <li>
-          あらためて掲載する場合は、新しい投稿として作成し、
-          掲載料110円（税込）が必要になります。
-        </li>
-        <li>やり取りの履歴はメッセージ一覧に残ります。</li>
-      </ul>
+      {/*
+        ★公開中と下書きで説明を変える。★ 下書きはまだ1円も払っていないので、
+        「掲載料の返金はありません」と出すと、払った覚えのない人を不安に
+        させるうえ、事実とも違う。
+      */}
+      {canClose ? (
+        <ul className="mt-4 list-inside list-disc space-y-1 text-washi-700">
+          <li>掲載を終了すると、検索や一覧に表示されなくなります。</li>
+          <li>
+            <strong>掲載料の返金はありません。</strong>
+          </li>
+          <li>
+            あらためて掲載する場合は、新しい投稿として作成し、
+            掲載料110円（税込）が必要になります。
+          </li>
+          <li>やり取りの履歴はメッセージ一覧に残ります。</li>
+        </ul>
+      ) : (
+        <ul className="mt-4 list-inside list-disc space-y-1 text-washi-700">
+          <li>この投稿はまだ公開されていません。</li>
+          <li>
+            <strong>料金は請求されていません。</strong>削除しても費用は
+            かかりません。
+          </li>
+          <li>削除すると元に戻せません。写真も一緒に削除されます。</li>
+        </ul>
+      )}
 
       <Form method="post" className="mt-8 flex flex-wrap gap-3">
         <CsrfInput token={csrfToken} />
@@ -108,7 +147,14 @@ export default function CloseListing({
         <button type="submit" className="btn btn-danger">
           {canClose ? "掲載を終了する" : "投稿を削除する"}
         </button>
-        <Link to={`/listings/${listingId}`} className="btn btn-secondary">
+        {/*
+          ★戻り先を状態で変える。★ 下書きの投稿ページ（/listings/:id）は
+          公開中しか出さないので 404 になる。「やめる」で行き止まりにしない。
+        */}
+        <Link
+          to={canClose ? `/listings/${listingId}` : "/mypage/drafts"}
+          className="btn btn-secondary"
+        >
           やめる
         </Link>
       </Form>

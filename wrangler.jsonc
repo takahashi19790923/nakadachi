@@ -50,6 +50,18 @@
 			"binding": "MEDIA",
 			"bucket_name": "nakadachi-media-dev",
 			"preview_bucket_name": "nakadachi-media-dev"
+		},
+		/*
+		 * ★DBの書き出し先。投稿の写真とは別のバケットにする。★
+		 * 中身は利用者の投稿・メッセージ・暗号化済みメールアドレス・
+		 * 決済記録を含む完全な写し。写真の配信経路や掃除処理が
+		 * 絶対に触らない場所へ隔離しておく。
+		 * dev では書き出さないので preview のバケットを指しておく。
+		 */
+		{
+			"binding": "BACKUPS",
+			"bucket_name": "nakadachi-backups-preview",
+			"preview_bucket_name": "nakadachi-backups-preview"
 		}
 	],
 
@@ -71,6 +83,10 @@
 				{
 					"binding": "MEDIA",
 					"bucket_name": "nakadachi-media-preview"
+				},
+				{
+					"binding": "BACKUPS",
+					"bucket_name": "nakadachi-backups-preview"
 				}
 			],
 			"routes": [
@@ -117,6 +133,10 @@
 				{
 					"binding": "MEDIA",
 					"bucket_name": "nakadachi-media"
+				},
+				{
+					"binding": "BACKUPS",
+					"bucket_name": "nakadachi-backups"
 				}
 			],
 			"routes": [

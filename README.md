@@ -234,15 +234,25 @@ Stripe 側へ移ります。当サービスは規約・特商法表記で「取�
 2. 本番の `sk_live_…` と、1で発行された `whsec_…` を投入する
 
    ```bash
-   npx wrangler secret put STRIPE_SECRET_KEY
-   ```
-
-   ```bash
-   npx wrangler secret put STRIPE_WEBHOOK_SECRET
+   pnpm run secrets:put -- --env production --only STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET
    ```
 
    値はプロンプトに貼り付けます。**コマンドラインに直接書かないでください**
    （PowerShell の履歴に平文で残ります）。
+
+   > ★`wrangler secret put` を直接使わないこと。★ 理由が2つある。
+   >
+   > 1. **`--env production` を付け忘れると別の Worker に入る。** この
+   >    リポジトリの Worker 名は `nakadachi` だが、実際に動いているのは
+   >    `nakadachi-production` / `nakadachi-preview`。省略すると
+   >    どこにも使われない `nakadachi` へ入り、`/api/config` は
+   >    `false` のまま。エラーも出ないので原因を追いにくい。
+   > 2. **貼り間違いを形で弾けない。** 上のスクリプトは `sk_live_` /
+   >    `whsec_` の形を検査してから投入する。項目が1つずれても
+   >    wrangler は素直に受け取り「Uploaded secret」と言う。
+   >
+   > どうしても直接使うなら `--env production` を必ず付ける。
+   > ★PowerShell のパイプで値を渡さないこと。★ BOM と CRLF が混ざる。
 3. `curl https://nakadachi.rewrite-co.com/api/config` で
    `"stripe":true,"stripeWebhook":true` を確認する
 4. 本番で110円の決済を1回通し、公開されることを確認する

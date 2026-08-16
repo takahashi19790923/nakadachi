@@ -17,11 +17,22 @@ export function MyListingList({
   emptyTitle,
   emptyDescription,
   primaryAction,
+  dangerAction,
 }: {
   listings: ListingSummary[];
   emptyTitle: string;
   emptyDescription: string;
   primaryAction?: (listing: ListingSummary) => { label: string; to: string };
+  /**
+   * 削除など、取り消せない操作。null を返せばその行には出さない。
+   *
+   * ★出す条件を呼ぶ側に決めさせる。★ 状態によっては遷移が許されず、
+   * 押した瞬間にエラーになる（決済の確認中など）。押せるのに失敗する
+   * ボタンは、利用者から見ると「壊れている」と区別がつかない。
+   */
+  dangerAction?: (
+    listing: ListingSummary,
+  ) => { label: string; to: string } | null;
 }) {
   if (listings.length === 0) {
     return (
@@ -38,6 +49,7 @@ export function MyListingList({
     <ul className="mt-4 space-y-3">
       {listings.map((listing) => {
         const action = primaryAction?.(listing);
+        const danger = dangerAction?.(listing) ?? null;
         return (
           <li key={listing.id} className="card p-4">
             <div className="flex flex-wrap items-start gap-4">
@@ -99,6 +111,12 @@ export function MyListingList({
               >
                 写真
               </Link>
+              {danger ? (
+                // 確認画面を挟む。一覧から1押しで消えないようにする。
+                <Link to={danger.to} className="btn btn-secondary btn-sm ml-auto text-red-700">
+                  {danger.label}
+                </Link>
+              ) : null}
             </div>
           </li>
         );
