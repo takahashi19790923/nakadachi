@@ -291,3 +291,49 @@ export function accountDeletionEmail(options: {
 
   return { subject: `【${SITE.name}】退会のお申し込みを受け付けました`, html, text };
 }
+
+/**
+ * 運営者への警報。
+ *
+ * ★利用者へは送らない。★ 宛先は EMAIL_REPLY_TO（運営の窓口）。
+ * 決済は成立したのに掲載が出ていない、返金したのに掲載が続いている、
+ * といった「どちらの画面にもエラーが出ない壊れ方」を知らせる。
+ * 件名を日本語にしていないのは、受信箱で絞り込みやすくするため。
+ */
+export function opsPaymentAlertEmail(options: {
+  kind: "paid_not_published" | "refunded_but_live";
+  listingTitle: string;
+  listingStatus: string;
+  adminUrl: string;
+}): EmailContent {
+  const paid = options.kind === "paid_not_published";
+  const heading = paid
+    ? "決済は成立したが掲載が出ていない"
+    : "返金済みなのに掲載が続いている";
+  const detail = paid
+    ? "利用者は110円を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。"
+    : "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。";
+
+  const { html, text } = layout({
+    heading,
+    bodyHtml: `
+      <p style="margin:0 0 12px">${escapeHtml(detail)}</p>
+      <p style="margin:0 0 12px"><strong>${escapeHtml(options.listingTitle)}</strong><br>
+      現在の状態: ${escapeHtml(options.listingStatus)}</p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        この通知は同じ決済につき1回だけ送られます。対応しても再送はされません。
+      </p>`,
+    bodyText: [
+      detail,
+      "",
+      options.listingTitle,
+      `現在の状態: ${options.listingStatus}`,
+      "",
+      "この通知は同じ決済につき1回だけ送られます。",
+    ].join("\n"),
+    actionUrl: options.adminUrl,
+    actionLabel: "決済状況を開く",
+  });
+
+  return { subject: `[nakadachi][ops] ${heading}`, html, text };
+}

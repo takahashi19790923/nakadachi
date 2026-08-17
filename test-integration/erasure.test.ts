@@ -271,6 +271,15 @@ describe("★定期処理が入口から実際に走る★", () => {
       db,
       env: testEnv(),
       logger: testLogger,
+      /*
+       * ★日付を必ず渡す。★ 省くと実行した日の曜日で結果が変わる。
+       * 月曜だけ週次のバックアップが加わり、testEnv には R2 の binding が
+       * 無いので exportDatabase が失敗して、この検査が落ちる。
+       * ★週に1日だけ落ちるテストは、落ちた日に「たまたま」で片付けられる。★
+       * 実際に月曜に踏んだ（2026-08-17）。バックアップ側は backup.test.ts が
+       * 曜日を指定して検査している。ここは火曜に固定して掃除だけを見る。
+       */
+      now: new Date("2026-08-18T19:20:00Z"),
     });
 
     // ★"failed" が入っていないこと。★ 件数0と失敗は別物。
@@ -317,7 +326,7 @@ describe("★定期処理が入口から実際に走る★", () => {
     );
   });
 
-  it("1時間ごとでは掲載期限の反映だけを行う", async () => {
+  it("1時間ごとでは掲載期限の反映と決済の突き合わせだけを行う", async () => {
     const db = await resetDatabase();
 
     const result = await runScheduledTasks({
@@ -327,8 +336,10 @@ describe("★定期処理が入口から実際に走る★", () => {
       logger: testLogger,
     });
 
-    expect(Object.keys(result)).toEqual(["expireListings"]);
+    // 削除系がここに混ざっていないこと（毎時消しにいくことになる）。
+    expect(Object.keys(result)).toEqual(["expireListings", "reconcilePayments"]);
     expect(result.expireListings).not.toBe("failed");
+    expect(result.reconcilePayments).not.toBe("failed");
   });
 
   it("★1つ落ちても残りは走り、落ちたものは失敗として残る★", async () => {

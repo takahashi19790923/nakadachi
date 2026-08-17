@@ -13,6 +13,7 @@ import {
   pruneOldBackups,
 } from "./services/backup-service.server.ts";
 import { notifyExpiringListings } from "./services/notification-service.server.ts";
+import { reconcilePayments } from "./services/payment/reconcile-service.server.ts";
 import {
   markEndedListingImages,
   purgeEndedListings,
@@ -85,13 +86,26 @@ async function runTask(
   }
 }
 
-/** 1時間ごと。掲載期限の反映だけ */
+/** 1時間ごと。掲載期限の反映と、決済の突き合わせ */
 async function runHourly(context: TaskContext): Promise<CronResult> {
+  const { db, env, logger } = context;
   const result: CronResult = {};
-  await runTask("expireListings", context.logger, result, async () => {
-    const expired = await expireDueListings(context.db);
+
+  await runTask("expireListings", logger, result, async () => {
+    const expired = await expireDueListings(db);
     return expired.length;
   });
+
+  /*
+   * ★決済と掲載の食い違いを毎時見る。★ 日次にすると、110円払った人が
+   * 最大24時間ものあいだ「払ったのに出ない」まま放置される。
+   * 問い合わせが来るまで誰も気づけない類なので、間隔を詰める。
+   * 中身は2本のクエリで、警報は1件につき1回だけ送る。
+   */
+  await runTask("reconcilePayments", logger, result, () =>
+    reconcilePayments({ db, env, logger }),
+  );
+
   return result;
 }
 

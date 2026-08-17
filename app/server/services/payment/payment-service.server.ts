@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
 
 import { listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
 import {
@@ -1021,22 +1021,7 @@ export async function getPaymentStateForListing(
   return rows[0] ?? null;
 }
 
-/**
- * 処理に失敗した Webhook の件数。
- *
- * ★失敗しても Stripe には 200 を返している。★ 同じ入力なら再送しても
- * 同じ失敗になるので、再送させ続けても意味がないという判断で、
- * 記録だけ残して 200 を返す設計にしてある（handleStripeEvent の catch）。
- *
- * ★その代わり、誰かが必ず見る場所に出す。★ ここを出さないと
- * 「110円は受け取ったが掲載が出ていない」が完全に不可視になる。
- * Stripe の画面では成功、こちらのログは流れて消える、利用者には
- * 何も届かない。実際にその状態を作ってしまった（2026-08-16）。
+/*
+ * 処理に失敗した Webhook の件数を数えるのは reconcile-service へ移した。
+ * 管理画面と毎時の警報が同じ数を見るようにするため、実装は1つに保つ。
  */
-export async function countFailedWebhookEvents(db: Db): Promise<number> {
-  const rows = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(paymentWebhookEvents)
-    .where(eq(paymentWebhookEvents.status, "failed"));
-  return rows[0]?.count ?? 0;
-}

@@ -191,6 +191,14 @@ export async function listReportsForAdmin(
     .limit(200);
 }
 
+/**
+ * 通報の対応状態を記録する。
+ *
+ * ★該当が無ければ false を返す。★ 呼び出し側は必ず確かめること。
+ * 捨てると「対応しました」と表示され管理操作の記録も残るのに、通報は
+ * 未対応のまま残る。ダッシュボードの件数だけが減ったように見えて、
+ * ★対応漏れが一番気づきにくい形で隠れる。★
+ */
 export async function resolveReport(
   db: Db,
   options: {
@@ -199,8 +207,8 @@ export async function resolveReport(
     adminId: string;
     note: string;
   },
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .update(reports)
     .set({
       status: options.status,
@@ -210,6 +218,7 @@ export async function resolveReport(
       updatedAt: new Date(),
     })
     .where(eq(reports.id, options.reportId));
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** 未対応の通報件数。管理ダッシュボードのバッジに使う */

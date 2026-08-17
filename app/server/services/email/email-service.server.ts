@@ -31,7 +31,13 @@ export type EmailTemplateName =
   | "new_message"
   | "listing_expiring"
   | "listing_suspended"
-  | "account_deletion";
+  | "account_deletion"
+  /**
+   * ★運営者への警報。利用者へは送らない。★
+   * 決済は成立したのに掲載が出ていない、返金したのに掲載が続いている、
+   * といった「どちらの画面にもエラーが出ない壊れ方」を知らせる。
+   */
+  | "ops_payment_alert";
 
 export interface SendEmailOptions {
   template: EmailTemplateName;

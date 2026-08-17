@@ -173,6 +173,14 @@ export async function listUsersForAdmin(
     .limit(options.limit ?? 200);
 }
 
+/**
+ * 利用者を停止・復帰させる。
+ *
+ * ★該当が無ければ false を返す。★ 呼び出し側は必ず確かめること。
+ * UPDATE は1行も当たらなくても例外にならない。捨てると「停止しました」と
+ * 表示され、監査ログにも残るのに誰も止まっていない状態ができる。
+ * ★記録が嘘になるのがいちばん困る。★ あとから経緯を追えなくなる。
+ */
 export async function setUserStatus(
   db: Db,
   options: {
@@ -180,8 +188,8 @@ export async function setUserStatus(
     status: "active" | "suspended";
     reason: string | null;
   },
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .update(users)
     .set({
       status: options.status,
@@ -190,6 +198,7 @@ export async function setUserStatus(
       updatedAt: new Date(),
     })
     .where(eq(users.id, options.userId));
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ── 退会 ──────────────────────────────────────────────────────────
