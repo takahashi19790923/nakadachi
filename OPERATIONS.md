@@ -10,7 +10,9 @@
 | 時刻（UTC / JST） | 処理 | 内容 |
 |---|---|---|
 | 毎時 00分 | `expireListings` | 掲載期限を過ぎた投稿を `expired` にする |
-| 19:20 / **04:20** | `purgeAccounts` | **30日を過ぎた退会依頼を実際に実行する** |
+| 〃 | `reconcilePayments` | **決済と掲載の食い違いを探し、あれば運営者へメール** |
+| 19:20 / **04:20** | `exportDatabase` / `pruneBackups` | 月曜だけ。DB を R2 へ書き出し、8世代より古いものを消す |
+| 〃 | `purgeAccounts` | **30日を過ぎた退会依頼を実際に実行する** |
 | 〃 | `purgeAccessRecords` | **保存期間(183日)を過ぎた発信者情報を消す** |
 | 〃 | `markEndedImages` | 終了から90日の掲載の写真に削除待ちの印をつける |
 | 〃 | `purgeDeletedImages` | 削除待ちの画像を R2 から消す |
@@ -104,12 +106,35 @@ DB まで実際に触ります。返すのは真偽と所要ミリ秒だけで�
 設定の反映を確認する口です。**秘密の値そのものは返しません。**
 「直したがデプロイし忘れた」をここで捕まえます。
 
+### 決済の突き合わせ（毎時、自動）
+
+★いちばん怖い壊れ方は「決済が成功しているのに掲載が出ない」。★
+Stripe 側は入金成功で終わり、こちらも Webhook に 200 を返して終わります。
+**どちらの画面にもエラーが出ません。** 利用者は110円払ったまま黙って去ります。
+2026-08-16 に、原因の異なる3つでこれを実際に作りました。
+
+直したうえで、それでも起きたときに人が気づける経路を `reconcilePayments`
+（`app/server/services/payment/reconcile-service.server.ts`）に置いてあります。
+
+| 見つけるもの | 条件 |
+|---|---|
+| `paid_not_published` | 決済成立から**60分**過ぎても `listings.published_at` が空 |
+| `refunded_but_live` | 全額返金済みなのに `listings.status = 'published'` |
+
+見つかると **`EMAIL_REPLY_TO` 宛に1件につき1通**届きます（件名 `[nakadachi][ops]`）。
+毎時鳴り続けると慣れて読まなくなるため、冪等キーで1回に抑えています。
+**メールが送れなくても Worker のログには必ず残ります。**
+
+> `status` ではなく `published_at` で判定しています。公開後に本人が掲載終了
+> した投稿は `closed` になり、`status` だけを見ると取り残しと区別がつきません。
+> ここを間違えると正常な投稿すべてで警報が鳴り、本物が埋もれます。
+
 ### 目視で見るもの
 
 | 何を | どこで | どうなったら対応 |
 |---|---|---|
 | 未対応の通報 | 管理ダッシュボード | 1件でも溜まったら |
-| Webhook の失敗 | `payment_webhook_events.status = 'failed'` | 1件でも |
+| Webhook の失敗 | 管理ダッシュボード（上部に警告） | 1件でも |
 | メール送信の失敗 | `email_delivery_logs.status = 'failed'` | 続くようなら鍵とドメイン認証を確認 |
 | 決済待ちのまま滞留 | `listings.status = 'payment_pending'` が長時間 | Webhook が届いているか確認 |
 

@@ -6,7 +6,7 @@ import { requireAdminGate } from "~/server/guards.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
 import { countOpenReports } from "~/server/repositories/moderation-repository.server";
 import { countListingsByStatus } from "~/server/services/listing-service.server";
-import { countFailedWebhookEvents } from "~/server/services/payment/payment-service.server";
+import { countFailedWebhooks } from "~/server/services/payment/reconcile-service.server";
 import type { Route } from "./+types/admin._index";
 import { getApp } from "~/server/app-context";
 
@@ -20,7 +20,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
       countListingsByStatus(db),
       countUsers(db),
       countOpenReports(db),
-      countFailedWebhookEvents(db),
+      countFailedWebhooks(db),
     ]);
 
   return { listingCounts, userCount, openReports, failedWebhooks };
