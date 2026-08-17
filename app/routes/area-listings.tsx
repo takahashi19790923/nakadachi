@@ -37,7 +37,10 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
   return buildPageMeta({
     title: `${loaderData.prefecture.name}の投稿${suffix} | ${SITE.name}`,
     description: `${loaderData.prefecture.name}で掲載中の投稿${loaderData.result.total}件。市区町村・カテゴリ・価格で絞り込めます。`,
-    path: `/area/${loaderData.prefecture.code}`,
+    path:
+      loaderData.filters.page > 1
+        ? `/area/${loaderData.prefecture.code}?page=${loaderData.filters.page}`
+        : `/area/${loaderData.prefecture.code}`,
     origin: loaderData.origin,
   });
 }

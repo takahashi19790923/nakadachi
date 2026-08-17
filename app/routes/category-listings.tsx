@@ -30,7 +30,9 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
   return buildPageMeta({
     title: `${category.name}${pageSuffix} | ${SITE.name}`,
     description: `${category.description} 現在${result.total}件を掲載中。地域や価格で絞り込めます。`,
-    path: `/c/${category.slug}`,
+    // ★2ページ目以降は自分自身を正規 URL にする。★ 1ページ目へ向けると検索エンジンは
+    // 「複製」とみなして索引から落とす。絞り込み（?pref= など）は正規化して基本の URL へ。
+    path: filters.page > 1 ? `/c/${category.slug}?page=${filters.page}` : `/c/${category.slug}`,
     origin: loaderData.origin,
   });
 }

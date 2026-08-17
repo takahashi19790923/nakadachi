@@ -98,31 +98,106 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
  */
 function structuredData(data: Route.ComponentProps["loaderData"]): string {
   const { listing, origin } = data;
-  const payload = {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: listing.title,
-    description: toMetaDescription(listing.body, 300),
-    url: new URL(`/listings/${listing.id}`, origin).toString(),
-    ...(listing.imageKey
-      ? {
-          image: new URL(
-            `/media/${encodeURIComponent(listing.imageKey)}`,
-            origin,
-          ).toString(),
-        }
-      : {}),
-    ...(listing.priceJpy !== null && listing.priceType !== "negotiable"
-      ? {
-          offers: {
+  const url = new URL(`/listings/${listing.id}`, origin).toString();
+  const image = listing.imageKey
+    ? new URL(`/media/${encodeURIComponent(listing.imageKey)}`, origin).toString()
+    : undefined;
+  const description = toMetaDescription(listing.body, 300);
+  const category = CATEGORIES[listing.categorySlug];
+
+  /*
+   * ★カテゴリで型を分ける。★ 以前は全部 Product/Offer にしていたので、
+   * 求人が「時給1,100円の商品・在庫あり」として検索エンジンへ渡っていた。
+   * 貸します・手伝いますも同様。Product は売ります・譲りますだけ。
+   * 求人は hiringOrganization が必須なので、会社名が無ければ出さない
+   * （中途半端な JobPosting は Search Console で警告になる）。
+   */
+  const main: Record<string, unknown> | null = (() => {
+    const base = { name: listing.title, description, url, ...(image ? { image } : {}) };
+    const area = `${listing.prefectureName}${listing.cityName}`;
+    const offer =
+      listing.priceJpy !== null && listing.priceType !== "negotiable"
+        ? {
             "@type": "Offer",
             price: listing.priceJpy,
             priceCurrency: "JPY",
             availability: "https://schema.org/InStock",
-            areaServed: `${listing.prefectureName}${listing.cityName}`,
+            areaServed: area,
+          }
+        : null;
+
+    switch (listing.categorySlug) {
+      case "sell-buy":
+      case "giveaway":
+        return { "@type": "Product", ...base, ...(offer ? { offers: offer } : {}) };
+      case "rental":
+      case "help":
+        return {
+          "@type": "Service",
+          ...base,
+          areaServed: area,
+          ...(offer ? { offers: offer } : {}),
+        };
+      case "job": {
+        const company = listing.details?.companyName;
+        if (!company || listing.priceJpy === null) return null;
+        const unitText =
+          ({ hour: "HOUR", day: "DAY", week: "WEEK", month: "MONTH", year: "YEAR" } as const)[
+            listing.priceUnit as "hour" | "day" | "week" | "month" | "year"
+          ] ?? undefined;
+        return {
+          "@type": "JobPosting",
+          title: listing.title,
+          description,
+          url,
+          ...(listing.publishedAt ? { datePosted: listing.publishedAt } : {}),
+          ...(listing.expiresAt ? { validThrough: listing.expiresAt } : {}),
+          employmentType: listing.kind === "full_time" ? "FULL_TIME" : "PART_TIME",
+          hiringOrganization: { "@type": "Organization", name: company },
+          jobLocation: {
+            "@type": "Place",
+            address: {
+              "@type": "PostalAddress",
+              addressRegion: listing.prefectureName,
+              addressLocality: listing.cityName,
+              addressCountry: "JP",
+            },
           },
-        }
-      : {}),
+          baseSalary: {
+            "@type": "MonetaryAmount",
+            currency: "JPY",
+            value: {
+              "@type": "QuantitativeValue",
+              minValue: listing.priceJpy,
+              ...(listing.salaryMaxJpy !== null ? { maxValue: listing.salaryMaxJpy } : {}),
+              ...(unitText ? { unitText } : {}),
+            },
+          },
+        };
+      }
+      default:
+        return null;
+    }
+  })();
+
+  // 目に見えるパンくず（カテゴリ ／ 都道府県）と同じ並びを機械にも伝える。
+  const breadcrumb = {
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: SITE.name, item: new URL("/", origin).toString() },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: category.name,
+        item: new URL(`/c/${category.slug}`, origin).toString(),
+      },
+      { "@type": "ListItem", position: 3, name: listing.title, item: url },
+    ],
+  };
+
+  const payload = {
+    "@context": "https://schema.org",
+    "@graph": main ? [main, breadcrumb] : [breadcrumb],
   };
   return JSON.stringify(payload).replace(/</g, "\\u003c");
 }
@@ -291,17 +366,31 @@ export default function ListingDetail({ loaderData }: Route.ComponentProps) {
             >
               投稿者に問い合わせる
             </Link>
-            <Form method="post" action={`/listings/${listing.id}/favorite`}>
-              <CsrfInput token={csrfToken} />
-              <input
-                type="hidden"
-                name="intent"
-                value={favorited ? "remove" : "add"}
-              />
-              <button type="submit" className="btn btn-secondary">
-                {favorited ? "お気に入りから外す" : "お気に入りに追加"}
-              </button>
-            </Form>
+            {isLoggedIn ? (
+              <Form method="post" action={`/listings/${listing.id}/favorite`}>
+                <CsrfInput token={csrfToken} />
+                <input
+                  type="hidden"
+                  name="intent"
+                  value={favorited ? "remove" : "add"}
+                />
+                <button type="submit" className="btn btn-secondary">
+                  {favorited ? "お気に入りから外す" : "お気に入りに追加"}
+                </button>
+              </Form>
+            ) : (
+              /*
+               * 未ログインには「ログインして追加」を出す。ボタンだけ出すと、
+               * 押す → ログイン → この画面へ戻る（追加はされていない）→ もう一度押す、
+               * になり、下の通報リンクの案内とも揃わない。
+               */
+              <Link
+                to={`/login?next=${encodeURIComponent(`/listings/${listing.id}`)}`}
+                className="btn btn-secondary"
+              >
+                ログインしてお気に入りに追加
+              </Link>
+            )}
           </>
         )}
       </section>
