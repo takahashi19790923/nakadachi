@@ -15,14 +15,31 @@ import * as schema from "../app/db/schema/index.ts";
  * Drizzle の公開 API は同一なので、型だけを合わせて使い回す。
  */
 
-export type DbTarget = "dev" | "preview" | "production";
+/**
+ * 接続先。
+ *
+ * ★2026-08-18、本番は Neon（シンガポール）から Supabase（東京）へ移した。★
+ *  - production      … Supabase。ホストは db.<ref>.supabase.co、データベースは postgres
+ *  - production-neon … 移行元の Neon。退避路として当面残す（数日様子を見て消す）
+ * dev / preview は引き続き Neon（gentle-wildflower プロジェクト）。
+ */
+export type DbTarget = "dev" | "preview" | "production" | "production-neon";
 
 /** 環境ごとの、期待するデータベース名。貼り間違いを検出するために使う */
 const EXPECTED_DATABASE: Readonly<Record<DbTarget, string>> = {
   dev: "nakadachi_dev",
   preview: "nakadachi_preview",
-  production: "nakadachi",
+  // Supabase は1プロジェクト＝1データベース（postgres）。名前で環境を見分けられないので、
+  // 下の EXPECTED_HOST でプロジェクトの ref まで見る。
+  production: "postgres",
+  "production-neon": "nakadachi",
 };
+
+/**
+ * 本番（Supabase）の期待するホスト。プロジェクトの ref を含むので取り違えられない。
+ * ★ref は秘密ではない。★ 接続にはロールとパスワードが要る。
+ */
+const SUPABASE_PRODUCTION_HOST = "db.eejuzgepfjkfscutstdm.supabase.co";
 
 /**
  * 期待する Neon のエンドポイント（ホスト名の先頭）。
@@ -36,22 +53,33 @@ const EXPECTED_DATABASE: Readonly<Record<DbTarget, string>> = {
  * ★エンドポイント名は秘密ではない。★ 接続にはロールとパスワードが要る。
  */
 const EXPECTED_HOST_PREFIX: Readonly<Partial<Record<DbTarget, string>>> = {
-  production: "ep-lucky-brook-",
+  "production-neon": "ep-lucky-brook-",
 };
 
 const ENV_VARIABLE: Readonly<Record<DbTarget, string>> = {
   dev: "DATABASE_URL_DEV",
   preview: "DATABASE_URL_PREVIEW",
   production: "DATABASE_URL_PRODUCTION",
+  "production-neon": "DATABASE_URL_PRODUCTION_NEON",
 };
 
+/** Supabase の接続文字列か（ホストで見る） */
+export function isSupabaseUrl(value: string): boolean {
+  return /@db\.[a-z0-9]+\.supabase\.co[:/]/.test(value);
+}
+
 export function parseTarget(value: string | undefined): DbTarget {
-  if (value === "preview" || value === "production" || value === "dev") {
+  if (
+    value === "preview" ||
+    value === "production" ||
+    value === "production-neon" ||
+    value === "dev"
+  ) {
     return value;
   }
   if (value === undefined) return "dev";
   throw new Error(
-    `接続先の指定が不正です: ${value}（dev / preview / production のいずれか）`,
+    `接続先の指定が不正です: ${value}（dev / preview / production / production-neon のいずれか）`,
   );
 }
 
@@ -69,11 +97,40 @@ export function requireConnectionString(target: DbTarget): string {
 
   if (!value) {
     throw new Error(
-      `${variable} が未設定です。.env.example をコピーして .env を作り、Neon の接続文字列を書いてください。`,
+      `${variable} が未設定です。.env.example をコピーして .env を作り、接続文字列を書いてください。`,
     );
   }
-  if (value.includes("REPLACE_ME")) {
+  if (value.includes("REPLACE_ME") || value.includes("PASSWORD_HERE")) {
     throw new Error(`${variable} がひな型のままです。実際の接続文字列に置き換えてください。`);
+  }
+
+  /*
+   * ★Supabase（本番）。★ データベース名は常に postgres なので、環境の取り違えは
+   * ホスト（プロジェクトの ref）で見る。Hyperdrive もスクリプトも Direct connection
+   * （5432）を使う。プーラー（6543 / pooler.supabase.com）は使わない
+   * （Hyperdrive が自前でプールする。二重にプールしない）。
+   */
+  if (isSupabaseUrl(value)) {
+    if (target !== "production") {
+      throw new Error(
+        `${variable} が Supabase を指していますが、${target} は Neon のはずです。`,
+      );
+    }
+    if (!value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
+      throw new Error(
+        `${variable} が想定と違う Supabase プロジェクトを指しています（本番は ${SUPABASE_PRODUCTION_HOST}）。`,
+      );
+    }
+    const dbName = /\/([A-Za-z0-9_]+)(\?|$)/.exec(value)?.[1];
+    if (dbName !== "postgres") {
+      throw new Error(`${variable} のデータベース名が postgres ではありません（${dbName ?? "不明"}）。`);
+    }
+    return value;
+  }
+  if (target === "production") {
+    throw new Error(
+      `${variable} が Supabase（${SUPABASE_PRODUCTION_HOST}）を指していません。本番は 2026-08-18 に Supabase へ移りました。Neon を指すなら production-neon を使ってください。`,
+    );
   }
 
   /*
@@ -122,16 +179,16 @@ export async function confirmIfProduction(
   target: DbTarget,
   action: string,
 ): Promise<void> {
-  if (target !== "production") return;
+  if (target !== "production" && target !== "production-neon") return;
   if (process.argv.includes("--yes")) return;
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question(
-    `\n★本番データベース（nakadachi）に対して「${action}」を実行します。★\n続けるには production と入力してください: `,
+    `\n★本番データベース（${describeTarget(target)}）に対して「${action}」を実行します。★\n続けるには ${target} と入力してください: `,
   );
   rl.close();
 
-  if (answer.trim() !== "production") {
+  if (answer.trim() !== target) {
     throw new Error("中止しました。");
   }
 }
@@ -144,10 +201,14 @@ export function createScriptDb(connectionString: string): {
     connectionString,
     // スクリプトは直列に流すので1本で足りる。
     max: 1,
-    // Neon は TLS 必須。ローカルの PGlite などでは無効になる。
+    // Neon も Supabase も TLS で繋ぐ。ローカルの PGlite などでは無効になる。
+    // Supabase の Direct connection は証明書チェーンが素の pg で検証できない
+    // （自己署名の CA。sslmode=verify-full には CA の配布が要る）ため、暗号化のみ。
     ssl: connectionString.includes("neon.tech")
       ? { rejectUnauthorized: true }
-      : undefined,
+      : isSupabaseUrl(connectionString)
+        ? { rejectUnauthorized: false }
+        : undefined,
   });
 
   return {
@@ -158,7 +219,13 @@ export function createScriptDb(connectionString: string): {
 
 /** 接続先を、秘密を出さずに1行で説明する */
 export function describeTarget(target: DbTarget): string {
-  return `${target}（データベース: ${EXPECTED_DATABASE[target]}）`;
+  const where =
+    target === "production"
+      ? "Supabase 東京"
+      : target === "production-neon"
+        ? "Neon シンガポール・移行元"
+        : "Neon";
+  return `${target}（${where} / データベース: ${EXPECTED_DATABASE[target]}）`;
 }
 
 /**

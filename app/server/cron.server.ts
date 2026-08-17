@@ -48,20 +48,17 @@ export type CronResult = Record<string, number | string>;
 export const CRON_HOURLY = "0 * * * *";
 /** 日次。UTC 19:20 = JST 04:20（利用の少ない時間帯に寄せる） */
 export const CRON_DAILY = "20 19 * * *";
-/**
- * DB を書き出す曜日（UTC）。1 = 月曜。
+/*
+ * バックアップは★毎日★取る（2026-08-18〜）。
  *
- * ★曜日つきの cron トリガーは使わない。★ Cloudflare の曜日指定は
- * 挙動が確かめられなかった。`0` は `invalid cron string` で拒否され、
- * wrangler は `SUN` を `0` に正規化して送るので SUN も同じく通らない。
- * 残った `1` と `7` を UTC 日曜に仕掛けて2回試したが、★どちらも発火しなかった。★
- * （2026-08-17 実測）
+ * 以前は週1回（UTC 月曜）だった。本番を Neon から Supabase（東京・Free）へ
+ * 移したことで、★DB 側の時点復旧（PITR）が無くなった★（Neon Free は6時間あった）。
+ * 自前の書き出しが唯一の備えになるので、間隔を1日に詰め、世代を14に増やす。
+ * 1回 100KB 程度なので R2 の費用は無視できる。
  *
- * 動くと確かめられないバックアップは、無いより危険になる。「ある」と
- * 思い込んで他の備えをしなくなるため。発火を実測済みの日次トリガーの中で、
- * 曜日をこちら側で見て週1回だけ走らせる。
+ * ★曜日つきの cron トリガーは使わない★（Cloudflare の曜日指定は `0` が拒否され、
+ * `1`/`7` は発火しなかった。2026-08-17 実測）。日次トリガーの中で毎回走らせる。
  */
-const BACKUP_WEEKDAY_UTC = 1;
 
 interface TaskContext {
   db: Db;
@@ -109,22 +106,21 @@ async function runHourly(context: TaskContext): Promise<CronResult> {
   return result;
 }
 
-/** 1日1回。削除と通知、週1回はバックアップも */
+/** 1日1回。バックアップ、削除、通知 */
 async function runDaily(
   context: TaskContext,
   now: Date,
 ): Promise<CronResult> {
   const { db, env, logger } = context;
   const result: CronResult = {};
+  void now; // 曜日で分岐していた名残。テストから時刻を渡せる口として残す。
 
   /*
    * ★バックアップを先に取る。★ このあとに続くのは全部「消す」処理で、
    * 消したあとに書き出すと、その日のバックアップからは消したものが
    * 失われている。取り戻したいのは消える前の状態のほう。
    */
-  if (now.getUTCDay() === BACKUP_WEEKDAY_UTC) {
-    await runBackup(context, result);
-  }
+  await runBackup(context, result);
 
   // ★約束した削除を先に置く。★ 実行時間の上限に当たった場合でも、
   // 「30日で消します」「183日で消します」と書いたものが優先して走る。
@@ -188,11 +184,11 @@ async function runDaily(
 }
 
 /**
- * 週1回、DB を R2 へ書き出す。日次の中から呼ぶ。
+ * 毎日、DB を R2 へ書き出す。日次の中から呼ぶ。
  *
- * ★Neon の PITR だけに頼らない。★ 無料プランの保持は24時間しかなく、
- * 25時間前の誤操作は取り戻せない。課金が始まると、失うものが
- * テストデータではなく利用者の投稿と決済記録になる。
+ * ★DB 側の時点復旧に頼らない。★ Supabase Free にはバックアップも PITR も無い
+ * （Neon Free でも6時間だけだった）。これが唯一の備え。課金が始まると、
+ * 失うものがテストデータではなく利用者の投稿と決済記録になる。
  */
 async function runBackup(
   context: TaskContext,

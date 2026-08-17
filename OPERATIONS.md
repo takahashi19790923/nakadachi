@@ -11,7 +11,7 @@
 |---|---|---|
 | 毎時 00分 | `expireListings` | 掲載期限を過ぎた投稿を `expired` にする |
 | 〃 | `reconcilePayments` | **決済と掲載の食い違いを探し、あれば運営者へメール** |
-| 19:20 / **04:20** | `exportDatabase` / `pruneBackups` | 月曜だけ。DB を R2 へ書き出し、8世代より古いものを消す |
+| 19:20 / **04:20** | `exportDatabase` / `pruneBackups` | **毎日。** DB を R2 へ書き出し、14世代より古いものを消す（Supabase Free には DB 側のバックアップが無い） |
 | 〃 | `purgeAccounts` | **30日を過ぎた退会依頼を実際に実行する** |
 | 〃 | `purgeAccessRecords` | **保存期間(183日)を過ぎた発信者情報を消す** |
 | 〃 | `markEndedImages` | 終了から90日の掲載の写真に削除待ちの印をつける |
@@ -163,15 +163,17 @@ where status = 'failed' group by template, error_code;
 
 | 対象 | 方法 | 保持 |
 |---|---|---|
-| DB | **Neon の PITR**（Point-in-Time Restore） | プランに依存。**本番（Free）は 6時間**（`history_retention_seconds: 21600` を 2026-08-17 に API で実測。「24時間」ではない） |
-| DB | 週1回の論理バックアップ（下記） | 手元または別のストレージで90日 |
+| DB | **Supabase Free には DB 側のバックアップも PITR も無い**（2026-08-18 に本番を Supabase 東京へ移した） | — |
+| DB | **毎日 04:20 JST に R2（`nakadachi-backups`）へ書き出し**（`app/server/services/backup-service.server.ts`） | 14世代 |
+| DB（preview） | Neon の PITR | Free は 6時間 |
 | R2 | バージョニングは既定で無効 | 下記の注意 |
 | コード | GitHub | — |
 | 秘密情報 | 個人用 Vault | — |
 
-**Neon の PITR は「保持期間内なら任意の時点へ戻せる」機能です。**
-プランごとの保持期間を確認し、それより長い保護が必要なら論理バックアップを
-併用してください。
+**本番の備えは R2 への日次の書き出しだけです。** 誤操作に気づくのが翌日以降なら
+前日の写しから戻せますが、当日ぶんの投稿・決済は Stripe 側の記録と突き合わせて
+復元することになります（下記「復旧後に必ず確認すること」）。他人の投稿と決済が
+入り始めたら、Supabase Pro（$25/月、日次バックアップ＋PITR）へ上げる判断をしてください。
 
 ```bash
 # 週1回。★出力ファイルは .gitignore 済みだが、置き場所に注意★

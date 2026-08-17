@@ -33,7 +33,9 @@
     "deploy:production": "pnpm run build:production && pnpm run check:build-secrets && wrangler deploy",
     "admin:create": "node --experimental-strip-types scripts/create-admin.ts",
     "cf-typegen": "wrangler types",
-    "postinstall": "wrangler types"
+    "postinstall": "wrangler types",
+    "db:migrate-to-supabase": "node --experimental-strip-types scripts/migrate-to-supabase.ts",
+    "db:create-app-role": "node --experimental-strip-types scripts/create-app-role.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",

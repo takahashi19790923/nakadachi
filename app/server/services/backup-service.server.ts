@@ -66,8 +66,8 @@ const TABLES = [
  */
 const MAX_ROWS_PER_TABLE = 50_000;
 
-/** 残す世代数。週1回なので約2か月ぶん */
-const KEEP_GENERATIONS = 8;
+/** 残す世代数。毎日なので2週間ぶん（キーは日付なので、同じ日に2回走っても増えない） */
+const KEEP_GENERATIONS = 14;
 
 export interface BackupResult {
   readonly key: string;

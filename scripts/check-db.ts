@@ -71,7 +71,9 @@ async function checkOne(target: DbTarget): Promise<boolean> {
 async function main(): Promise<void> {
   const arg = process.argv[2];
   const targets: DbTarget[] =
-    arg === "all" ? ["dev", "preview", "production"] : [parseTarget(arg)];
+    arg === "all"
+      ? ["dev", "preview", "production", "production-neon"]
+      : [parseTarget(arg)];
 
   let allOk = true;
   for (const target of targets) {
