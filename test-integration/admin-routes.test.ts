@@ -208,6 +208,39 @@ describe("★投稿を非公開にする★", () => {
     expect(await getPublishedListing(db, listingId)).not.toBeNull();
   });
 
+  it("★公開に戻しても掲載期間は作り直さない★", async () => {
+    /*
+     * 以前は published への遷移で必ず published_at=今・expires_at=今+日数 に
+     * していたので、管理者が一時的に止めて戻すたびに払っていない期間が
+     * 増えた。残り2日だった投稿が復帰で30日に戻る。元の日付を保つ。
+     */
+    const publishedAt = new Date(Date.now() - 28 * 86_400_000);
+    const expiresAt = new Date(Date.now() + 2 * 86_400_000);
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt,
+      expiresAt,
+    });
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "確認のため一時的に非公開" },
+    });
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "確認できたため公開に戻す" },
+    });
+
+    const [row] = await db
+      .select({ publishedAt: listings.publishedAt, expiresAt: listings.expiresAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.publishedAt!.getTime()).toBe(publishedAt.getTime());
+    expect(row!.expiresAt!.getTime()).toBe(expiresAt.getTime());
+  });
+
   it("★理由が短いと何も起きない★", async () => {
     const listingId = await makePublished(owner.id);
 

@@ -23,9 +23,18 @@ export const adminActions = pgTable(
   "admin_actions",
   {
     id: ulidPk(),
-    adminId: ulidRef("admin_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+    /*
+     * 管理者が退会したら null にする。
+     *
+     * 以前は restrict だったが、それだと管理操作を1件でも行った利用者の
+     * 退会削除が毎日失敗し続け、「30日後に消します」が永久に果たされない
+     * （2026-08-17 の点検で発覚。erasure-service は restrict の表を先に
+     * 片づける前提で書かれていたが、片づけていなかった）。
+     * 「誰が」は audit_logs（外部キー無し・消さない）に残る。
+     */
+    adminId: ulidRef("admin_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     actionType: adminActionTypeEnum("action_type").notNull(),
     targetType: varchar("target_type", { length: 32 }).notNull(),
     targetId: varchar("target_id", { length: 40 }).notNull(),

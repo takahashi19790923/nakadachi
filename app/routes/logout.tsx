@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 
 import { clearGateCookie } from "~/server/admin-gate.server";
-import { assertSameOrigin } from "~/server/csrf.server";
+import { assertCsrf } from "~/server/csrf.server";
 import { destroySession } from "~/server/session.server";
 import type { Route } from "./+types/logout";
 import { getApp } from "~/server/app-context";
@@ -17,7 +17,9 @@ import { getApp } from "~/server/app-context";
  */
 export async function action({ request, context: rawContext }: Route.ActionArgs) {
   const context = getApp(rawContext);
-  assertSameOrigin(request, context.env);
+  // ★他の状態変更と同じ二重の照合（Origin ＋ 署名付きトークン）。★
+  // ここだけ Origin 照合のみだったので、設計上の穴として1か所残っていた。
+  await assertCsrf(request, context.env, await request.formData());
 
   const { setCookie } = await destroySession({
     db: context.getDb(),

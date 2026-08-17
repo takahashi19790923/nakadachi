@@ -16,16 +16,23 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
     return { listings: [], missing: 0 };
   }
 
-  // 公開中のものだけを引き直す。掲載終了したものは一覧に出さず、件数で知らせる。
-  const ids = new Set(favorites.map((favorite) => favorite.listingId));
+  /*
+   * 公開中のものだけを引き直す。掲載終了したものは一覧に出さず、件数で知らせる。
+   *
+   * ★ID で絞って SQL で引く。★ 以前は「新着200件を取ってから JS で
+   * お気に入りと突き合わせる」だったので、サイト全体で200件を超えた瞬間、
+   * 古めの掲載をお気に入りにした人には★公開中なのに「掲載が終了したため
+   * 表示していません」と嘘が出た★（2026-08-17 の点検で発覚）。
+   */
+  const ids = favorites.map((favorite) => favorite.listingId);
   const result = await searchListings(db, {
+    ids,
     sort: "newest",
     page: 1,
-    perPage: 200,
+    perPage: Math.max(ids.length, 1),
   });
-  const listings = result.items.filter((listing) => ids.has(listing.id));
 
-  return { listings, missing: ids.size - listings.length };
+  return { listings: result.items, missing: ids.length - result.items.length };
 }
 
 export function meta(): Route.MetaDescriptors {

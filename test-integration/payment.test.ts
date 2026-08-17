@@ -68,6 +68,7 @@ function completedEvent(overrides: {
   listingId?: string;
   userId?: string;
   paymentStatus?: string;
+  durationDays?: string;
 }): StripeEvent {
   return {
     id: overrides.id ?? "evt_test_1",
@@ -84,7 +85,7 @@ function completedEvent(overrides: {
           listing_id: overrides.listingId ?? listingId,
           user_id: overrides.userId ?? userId,
           payment_id: paymentId,
-          duration_days: "30",
+          duration_days: overrides.durationDays ?? "30",
         },
       },
     },
@@ -142,6 +143,35 @@ describe("正常な決済", () => {
       .limit(1);
     expect(rows[0]!.publishedAt).not.toBeNull();
     expect(rows[0]!.expiresAt).not.toBeNull();
+  });
+
+  it("★掲載期間は投稿に保存した日数で決まる（決済の metadata ではない）★", async () => {
+    /*
+     * 以前は Checkout の metadata.duration_days をそのまま使っていた。
+     * 確認画面のフォームを書き換えれば 110円で 36500日（100年）にできたし、
+     * 0 を送れば公開した瞬間に期限切れになった。行の値だけを見る。
+     */
+    await db
+      .update(listings)
+      .set({ durationDays: 90 })
+      .where(eq(listings.id, listingId));
+
+    await handleStripeEvent({
+      db,
+      env,
+      logger: testLogger,
+      event: completedEvent({ durationDays: "36500" }),
+      rawPayload: "{}",
+    });
+
+    const rows = await db
+      .select({ publishedAt: listings.publishedAt, expiresAt: listings.expiresAt })
+      .from(listings)
+      .where(eq(listings.id, listingId))
+      .limit(1);
+    const days =
+      (rows[0]!.expiresAt!.getTime() - rows[0]!.publishedAt!.getTime()) / 86_400_000;
+    expect(Math.round(days)).toBe(90);
   });
 });
 
@@ -491,7 +521,6 @@ describe("★決済をやめて戻ってきた人がもう一度払える★", (
       request: new Request("https://example.test/checkout", { method: "POST" }),
       listingId: id,
       userId,
-      durationDays: 30,
     });
   }
 

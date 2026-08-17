@@ -66,6 +66,8 @@ export interface ListingDetail extends ListingSummary {
   readonly ownerId: string;
   readonly body: string;
   readonly status: ListingStatus;
+  /** 掲載期間（日数）。公開時に expiresAt へ換算される */
+  readonly durationDays: number;
   readonly viewCount: number;
   readonly createdAt: string;
   readonly moderationReason: string | null;

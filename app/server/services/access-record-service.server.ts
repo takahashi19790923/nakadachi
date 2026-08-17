@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import {
   accessRecords,
@@ -168,10 +168,24 @@ export async function disclosureForTarget(options: {
  * ★これを止めないこと。★ 開示のために持っているつもりの表が、
  * 消さないまま溜まると、そのまま漏洩時の被害の大きさになる。
  */
-export async function purgeExpiredAccessRecords(db: Db): Promise<number> {
-  const deleted = await db
-    .delete(accessRecords)
-    .where(lt(accessRecords.expiresAt, new Date()))
-    .returning({ id: accessRecords.id });
-  return deleted.length;
+export async function purgeExpiredAccessRecords(
+  db: Db,
+  limit = 5000,
+): Promise<number> {
+  /*
+   * ★1回の件数を区切り、消した行を返さない。★ 以前は上限無しの DELETE に
+   * RETURNING を付けて .length を数えていた。定期処理が数日止まったあとや
+   * 利用が伸びたあとの初回で、消す行を全部 Worker へ運んでから数える形になり、
+   * 実行時間の上限に当たる。他の掃除（保持期間・セッション・レート制限）は
+   * みな rowCount を見ている。ここだけが例外だった。残りは翌日また消える。
+   */
+  const result = await db.execute(sql`
+    delete from access_records
+    where id in (
+      select id from access_records
+      where expires_at < now()
+      limit ${limit}
+    )
+  `);
+  return result.rowCount ?? 0;
 }

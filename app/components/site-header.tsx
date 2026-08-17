@@ -1,13 +1,17 @@
 import { Form, Link, NavLink } from "react-router";
 
+import { CsrfInput } from "./form";
+
 import { CATEGORY_LIST } from "~/domain/categories";
 import { SITE } from "~/config/site";
 
 interface Props {
   user: { id: string; role: "user" | "admin" } | null;
+  /** ログアウトのフォームに埋める。他の状態変更と同じく二重の照合を通す */
+  csrfToken: string;
 }
 
-export function SiteHeader({ user }: Props) {
+export function SiteHeader({ user, csrfToken }: Props) {
   return (
     <header className="border-b border-washi-200 bg-white">
       <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-4 py-3">
@@ -61,6 +65,7 @@ export function SiteHeader({ user }: Props) {
                 先読みやブラウザの拡張が勝手に踏んでログアウトさせられる。
               */}
               <Form method="post" action="/logout">
+                <CsrfInput token={csrfToken} />
                 <button type="submit" className="btn btn-secondary px-3 py-2 text-sm">
                   ログアウト
                 </button>

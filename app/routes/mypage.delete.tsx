@@ -16,6 +16,8 @@ import {
   getPendingDeletionRequest,
   requestAccountDeletion,
 } from "~/server/repositories/user-repository.server";
+import { closeListingsOnDeletionRequest } from "~/server/services/erasure-service.server";
+import { notifyAccountDeletionRequested } from "~/server/services/notification-service.server";
 import type { Route } from "./+types/mypage.delete";
 import { getApp } from "~/server/app-context";
 
@@ -68,14 +70,37 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       return { fields: toFieldErrors(parsed.error), message: null, done: false };
     }
 
-    await requestAccountDeletion(db, user.id);
+    const deletion = await requestAccountDeletion(db, user.id);
+
+    /*
+     * ★公開中の投稿はこの時点で止める。★ 画面で「お申し込みの時点で掲載を
+     * 終了します」と約束している。以前は関数だけあって呼んでおらず、
+     * 嫌がらせが理由で退会する人の掲載に30日間問い合わせが届き続けた
+     * （2026-08-17 の点検で発覚）。
+     */
+    const closed = await closeListingsOnDeletionRequest(db, user.id);
+
     // ★個人情報を監査ログへ書かない。★ 誰が・いつ の事実だけを残す。
     await writeAuditLog(db, context.env, {
       action: "account.deletion_requested",
       actorId: user.id,
       request,
-      metadata: { graceDays: DELETION_GRACE_DAYS },
+      metadata: { graceDays: DELETION_GRACE_DAYS, closedListings: closed },
     });
+
+    // 取り消しの案内。応答の外で送る（送れなくても申し込みは成立している）。
+    context.defer(
+      notifyAccountDeletionRequested({
+        db,
+        env: context.env,
+        logger: context.logger,
+        userId: user.id,
+        requestId: deletion.id,
+        scheduledPurgeAt: deletion.scheduledPurgeAt,
+      }).catch((error: unknown) => {
+        context.logger.error("account deletion mail failed", error);
+      }),
+    );
 
     return { fields: null, message: null, done: true };
   } catch (error) {
@@ -136,7 +161,10 @@ export default function DeleteAccount({
             お申し込みから{DELETION_GRACE_DAYS}日後に、アカウント・投稿・写真・
             メッセージを削除します。
           </li>
-          <li>公開中の投稿は、お申し込みの時点で掲載を終了します。</li>
+          <li>
+            公開中の投稿は、お申し込みの時点で掲載を終了します。
+            <strong>退会を取り消しても、終了した掲載は元に戻りません。</strong>
+          </li>
           <li>
             <strong>掲載料の返金はありません。</strong>
           </li>

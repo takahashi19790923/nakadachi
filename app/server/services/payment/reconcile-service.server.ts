@@ -83,10 +83,20 @@ export async function findPaymentAnomalies(db: Db): Promise<PaymentAnomaly[]> {
  *
  * ★失敗しても Stripe には 200 を返している。★ 同じ入力なら再送しても
  * 同じ失敗になるという判断でそうしてあるが、代わりに誰かが気づく必要がある。
+ *
+ * ★受け取ったまま止まっているものも数える。★ 重複防止の行を先に作ってから
+ * 処理する作りなので、処理の途中で Worker が落ちると status='received' の
+ * まま残る。Stripe の再送は一意制約に当たって「重複」で素通りし、
+ * 誰も処理しない。failed だけを見ていると、この形の「払ったのに出ない」が
+ * どの警報にも掛からなかった（2026-08-17 の点検で発覚）。
+ * 15分は「処理中」の可能性を見て猶予にしている。
  */
 export async function countFailedWebhooks(db: Db): Promise<number> {
   const rows = await db.execute<{ n: number }>(sql`
-    select count(*)::int as n from payment_webhook_events where status = 'failed'
+    select count(*)::int as n
+    from payment_webhook_events
+    where status = 'failed'
+       or (status = 'received' and received_at < now() - interval '15 minutes')
   `);
   return rows.rows[0]?.n ?? 0;
 }
@@ -94,7 +104,7 @@ export async function countFailedWebhooks(db: Db): Promise<number> {
 /**
  * 突き合わせて、異常があれば運営者へ知らせる。
  *
- * 戻り値は見つかった件数。0 なら健全。
+ * 戻り値は見つかった件数（投稿単位の異常 ＋ 処理できていない Webhook）。0 なら健全。
  */
 export async function reconcilePayments(options: {
   db: Db;
@@ -127,6 +137,34 @@ export async function reconcilePayments(options: {
   );
 
   const to = env.EMAIL_REPLY_TO;
+
+  /*
+   * ★失敗した Webhook についてもメールを出す。★ 以前は件数をログに出す
+   * だけで、メールは投稿単位の異常にしか出していなかった。Session を作った
+   * 直後に決済記録の INSERT が失敗した場合などは、投稿側に痕跡が無いので
+   * こちらにしか出ない。1日に1通（件数が変わっても同じ日は再送しない。
+   * 直すまで毎時鳴らさないのは上と同じ理由）。
+   */
+  if (failedWebhooks > 0) {
+    const day = new Date().toISOString().slice(0, 10);
+    await sendEmail(
+      {
+        template: "ops_payment_alert",
+        to,
+        content: opsPaymentAlertEmail({
+          kind: "failed_webhooks",
+          listingTitle: `処理できていない決済通知が ${failedWebhooks} 件`,
+          listingStatus: "payment_webhook_events.status = failed / received（15分超）",
+          adminUrl: new URL("/admin/payments", env.APP_ORIGIN).toString(),
+        }),
+        idempotencyKey: `ops_payment_alert:failed_webhooks:${day}`,
+      },
+      { db, env, logger },
+    ).catch((error: unknown) => {
+      logger.error("ops alert email failed", error, { kind: "failed_webhooks" });
+    });
+  }
+
   for (const anomaly of anomalies) {
     /*
      * ★1件につき1回だけ。★ 冪等キーで抑える。直すまで毎時鳴ると
@@ -154,5 +192,6 @@ export async function reconcilePayments(options: {
     });
   }
 
-  return anomalies.length;
+  // 失敗した Webhook も「異常」として数える。0 が返るのは健全なときだけ。
+  return anomalies.length + failedWebhooks;
 }

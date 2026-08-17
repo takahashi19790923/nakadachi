@@ -59,7 +59,7 @@ export default function CategoryListings({ loaderData }: Route.ComponentProps) {
       <Pagination
         page={result.page}
         totalPages={result.totalPages}
-        buildHref={(page) => buildPageHref(basePath, filters, page)}
+        buildHref={(page) => buildPageHref(basePath, filters, page, ["category"])}
       />
     </div>
   );

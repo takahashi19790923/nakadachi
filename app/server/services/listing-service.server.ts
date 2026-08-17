@@ -134,7 +134,8 @@ export async function createDraft(
       prefectureCode: input.prefectureCode,
       cityCode: input.cityCode,
       areaNote: input.areaNote ?? null,
-      // 掲載期間は公開時に確定する。下書きの時点では期限を持たせない。
+      // 掲載期間は日数で保存し、公開時に expires_at へ換算する。
+      durationDays: input.durationDays ?? LISTING_DURATION_DAYS_DEFAULT,
       expiresAt: null,
     });
     await tx.insert(listingCategoryDetails).values({
@@ -206,6 +207,15 @@ export async function updateListing(
         prefectureCode: input.prefectureCode,
         cityCode: input.cityCode,
         areaNote: input.areaNote ?? null,
+        /*
+         * 掲載期間は下書きのあいだだけ変えられる。公開後は編集画面に
+         * 欄が無く送られてこない（undefined）。★公開中に変えられると
+         * expires_at と食い違い、期限が来ても終わらない・早く終わる★
+         * ができる。送られてきても公開中なら無視する。
+         */
+        ...(row.status === "draft" && input.durationDays !== undefined
+          ? { durationDays: input.durationDays }
+          : {}),
         updatedAt: new Date(),
       })
       .where(eq(listings.id, listingId));
@@ -240,13 +250,18 @@ export async function transitionListing(
   const executor = options.tx ?? db;
 
   const rows = await executor
-    .select({ status: listings.status })
+    .select({
+      status: listings.status,
+      durationDays: listings.durationDays,
+      publishedAt: listings.publishedAt,
+    })
     .from(listings)
     .where(eq(listings.id, options.listingId))
     .limit(1);
 
-  const from = rows[0]?.status;
-  if (!from) throw notFound(`listing not found: ${options.listingId}`);
+  const current = rows[0];
+  const from = current?.status;
+  if (!current || !from) throw notFound(`listing not found: ${options.listingId}`);
 
   if (options.expectedFrom && from !== options.expectedFrom) {
     return { changed: false, from };
@@ -261,10 +276,26 @@ export async function transitionListing(
   };
 
   if (options.to === "published") {
-    values.publishedAt = now;
-    const days = options.durationDays ?? LISTING_DURATION_DAYS_DEFAULT;
-    values.expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
     values.moderationReason = null;
+    if (from === "suspended" && current.publishedAt) {
+      /*
+       * ★非公開からの復帰では期間を作り直さない。★ 管理者が一時的に
+       * 止めて戻しただけで、published_at が今日になり expires_at が
+       * また30日先になっていた（払っていない期間が増える）。
+       * 元の日付をそのまま残す。期限がすでに過ぎていれば、毎時の
+       * 期限切れ処理が expired にする。それが正しい。
+       */
+    } else {
+      values.publishedAt = now;
+      /*
+       * ★日数は行の duration_days が正。★ 呼び出し側の値は、それより
+       * 優先させたい特別な理由があるときだけ渡す（今のところ無い）。
+       * 以前は Checkout の metadata から読んだ値をそのまま使っていて、
+       * 確認画面のフォームを書き換えれば任意の日数で公開できた。
+       */
+      const days = options.durationDays ?? current.durationDays;
+      values.expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    }
   }
   if (options.to === "closed" || options.to === "expired") {
     values.closedAt = now;

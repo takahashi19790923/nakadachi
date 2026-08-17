@@ -67,8 +67,15 @@ export const reports = pgTable(
       .on(t.reporterId, t.targetListingId)
       .where(sql`target_listing_id is not null`),
     index("reports_status_created_idx").on(t.status, t.createdAt.desc()),
+    // 管理画面の「状態を絞らない一覧」は created_at だけで並べる。
+    // (status, created_at) の索引は先頭が status なので、これには使えない。
+    index("reports_created_idx").on(t.createdAt.desc()),
     index("reports_target_listing_idx").on(t.targetListingId),
     index("reports_target_user_idx").on(t.targetUserId),
+    // 通報されたメッセージ／通報者から引く。外部キーの参照側は
+    // Postgres が索引を作らないので、退会時の連鎖削除が表全体を走査する。
+    index("reports_target_message_idx").on(t.targetMessageId),
+    index("reports_reporter_created_idx").on(t.reporterId, t.createdAt.desc()),
   ],
 );
 

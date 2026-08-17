@@ -38,6 +38,8 @@ export const conversationThreads = pgTable(
   (t) => [
     uniqueIndex("threads_listing_initiator_key").on(t.listingId, t.initiatorId),
     index("threads_listing_idx").on(t.listingId),
+    // 外部キーの参照側。無いと退会時の連鎖削除が表全体を走査する。
+    index("threads_initiator_idx").on(t.initiatorId),
     index("threads_last_message_idx").on(t.lastMessageAt.desc()),
   ],
 );

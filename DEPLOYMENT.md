@@ -108,13 +108,20 @@ curl が通ることは「人が使える」ことの証明になりません。
 ## 4. マイグレーション
 
 ```bash
-# .env の DATABASE_URL を対象環境の「所有者ロール」にしてから
-pnpm run db:migrate
-pnpm run db:seed
+# .env に DATABASE_URL_DEV / _PREVIEW / _PRODUCTION（所有者ロール）を置いた上で
+pnpm run db:migrate                     # dev
+pnpm run db:migrate preview
+pnpm run db:migrate production          # "production" と打つ確認あり
+pnpm run db:migrate production --yes    # 確認を飛ばす（自動化・無人のとき）
 ```
 
 **アプリより先に流してください。** 新しい列を使うコードを先に出すと、
-その間のリクエストが落ちます。
+その間のリクエストが落ちます。実際に踏んだ形: `0003` で `listings.duration_days`
+を足したあと、dev DB に流す前に E2E を回して `column listings.duration_days
+does not exist` で 500（2026-08-17）。**順番は「3環境のマイグレーション →
+preview デプロイ → 本番デプロイ」。**
+
+適用済みの版は `drizzle.__drizzle_migrations` 表で確認できます。
 
 **後方互換のない変更（列の削除・型の変更）は2段階に分けてください。**
 

@@ -184,6 +184,45 @@ describe("警報の送りかた", () => {
     `);
     expect(await countFailedWebhooks(db)).toBe(1);
   });
+
+  it("★受け取ったまま止まっている Webhook も数える（15分を過ぎたもの）★", async () => {
+    /*
+     * 重複防止の行を先に作ってから処理する作りなので、処理の途中で Worker が
+     * 落ちると received のまま残る。Stripe の再送は「重複」で素通りし、
+     * 誰も処理しない。failed だけを見ていると、この形は警報に掛からない。
+     */
+    await db.execute(sql`
+      insert into payment_webhook_events
+        (id, provider, event_id, event_type, payload_digest, status, received_at)
+      values
+        (${ulid()}, 'stripe', 'evt_fresh', 'checkout.session.completed',
+         ${"b".repeat(64)}, 'received', now() - interval '3 minutes'),
+        (${ulid()}, 'stripe', 'evt_stuck', 'checkout.session.completed',
+         ${"c".repeat(64)}, 'received', now() - interval '40 minutes')
+    `);
+    // 3分前のものは処理中かもしれないので数えない。40分前のは数える。
+    expect(await countFailedWebhooks(db)).toBe(1);
+  });
+
+  it("★失敗した Webhook があれば運営者へメールが出る（1日1通）★", async () => {
+    // 以前は件数をログに出すだけで、メールは投稿単位の異常にしか出ていなかった。
+    await db.execute(sql`
+      insert into payment_webhook_events
+        (id, provider, event_id, event_type, payload_digest, status)
+      values (${ulid()}, 'stripe', 'evt_fail2', 'checkout.session.completed',
+              ${"d".repeat(64)}, 'failed')
+    `);
+
+    expect(await reconcilePayments({ db, env, logger: testLogger })).toBe(1);
+    expect(await reconcilePayments({ db, env, logger: testLogger })).toBe(1);
+
+    const sent = await db
+      .select({ key: emailDeliveryLogs.idempotencyKey })
+      .from(emailDeliveryLogs)
+      .where(eq(emailDeliveryLogs.template, "ops_payment_alert"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.key).toMatch(/^ops_payment_alert:failed_webhooks:\d{4}-\d{2}-\d{2}$/);
+  });
 });
 
 describe("毎時の定期処理から呼ばれる", () => {

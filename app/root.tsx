@@ -84,7 +84,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         >
           本文へ移動
         </a>
-        <SiteHeader user={data?.user ?? null} />
+        <SiteHeader user={data?.user ?? null} csrfToken={data?.csrfToken ?? ""} />
         <main id="main" className="flex-1">
           {children}
         </main>

@@ -12,7 +12,10 @@ import {
   SALARY_UNIT_LABEL,
   type CategorySlug,
 } from "~/domain/categories";
-import { LISTING_DURATION_DAYS_CHOICES } from "~/domain/pricing";
+import {
+  LISTING_DURATION_DAYS_CHOICES,
+  LISTING_DURATION_DAYS_DEFAULT,
+} from "~/domain/pricing";
 import type { ListingDetail } from "~/domain/listing-types";
 import {
   CheckboxField,
@@ -338,6 +341,12 @@ export function ListingForm({
 
         {/* ── 掲載期間 ─────────────────────────────────────── */}
         {lockDuration ? (
+          /*
+           * 公開中は欄を出さない。フィールドが送られてこないので、
+           * 検証スキーマ側は durationDays を任意にしてある。ここに hidden を
+           * 置く手もあるが、送らせないほうが「公開後は変えられない」を
+           * サーバー側の1か所で守れる。
+           */
           <p className="field-hint mt-4">
             公開中の投稿では掲載期間を変更できません。編集による追加の料金はかかりません。
           </p>
@@ -346,7 +355,7 @@ export function ListingForm({
             name="durationDays"
             label="掲載期間"
             required
-            defaultValue="30"
+            defaultValue={String(listing?.durationDays ?? LISTING_DURATION_DAYS_DEFAULT)}
             error={errors?.durationDays}
             options={LISTING_DURATION_DAYS_CHOICES.map((days) => ({
               value: String(days),

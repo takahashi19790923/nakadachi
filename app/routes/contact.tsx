@@ -10,6 +10,7 @@ import { TurnstileWidget } from "~/components/turnstile";
 import { SITE } from "~/config/site";
 import { TURNSTILE_FIELD } from "~/domain/form-fields";
 import { buildPageMeta } from "~/domain/seo";
+import { ulid } from "~/domain/ulid";
 import { contactSchema } from "~/domain/validation/interaction";
 import { formDataToObject, toFieldErrors,
   formString,
@@ -20,6 +21,8 @@ import { toPublicError } from "~/server/errors";
 import { loadUser } from "~/server/guards.server";
 import { maskEmail } from "~/server/logger.server";
 import { enforceRateLimit } from "~/server/rate-limit.server";
+import { sendEmail } from "~/server/services/email/email-service.server";
+import { contactInboundEmail } from "~/server/services/email/templates.server";
 import { clientIp } from "~/server/session.server";
 import { hashIp } from "~/server/crypto.server";
 import { requireSecret } from "~/server/env.server";
@@ -95,8 +98,43 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       from: maskEmail(parsed.data.email),
     });
 
-    // 運営者への転送は、送信元ドメインの認証が済んでから有効にする。
-    // 現時点では受付の記録のみを残す（OPERATIONS.md 参照）。
+    /*
+     * ★運営者へ転送する。★ 送信元ドメインの認証が済むまで転送を止めて
+     * いたが、その間も画面は「受け付けました。ご返信します」と出していた。
+     * 本文は文字数しか残らず、詐欺の通報も法的な相談も誰にも届かなかった
+     * （2026-08-17 の点検で発覚）。送れなかったら成功と言わない。
+     *
+     * 宛先は EMAIL_REPLY_TO（サポート窓口）。Reply-To を差出人にして、
+     * 運営者がそのまま返信できるようにする。
+     */
+    const delivery = await sendEmail(
+      {
+        template: "contact_inbound",
+        to: context.env.EMAIL_REPLY_TO,
+        replyTo: parsed.data.email,
+        content: contactInboundEmail({
+          fromEmail: parsed.data.email,
+          subject: parsed.data.subject,
+          body: parsed.data.body,
+        }),
+        idempotencyKey: `contact_inbound:${ulid()}`,
+      },
+      { db: context.getDb(), env: context.env, logger: context.logger },
+    );
+
+    if (!delivery.sent) {
+      // 記録は残っている（email_delivery_logs）。利用者には別の経路を案内する。
+      context.logger.error(
+        "contact form could not be forwarded",
+        new Error(delivery.skipped ?? "send_failed"),
+      );
+      return {
+        fields: null,
+        message: `送信できませんでした。お手数ですが ${SITE.supportEmail} へ直接メールでご連絡ください。`,
+        sent: false,
+      };
+    }
+
     return { fields: null, message: null, sent: true };
   } catch (error) {
     if (error instanceof Response) throw error;

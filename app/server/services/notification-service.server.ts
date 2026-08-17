@@ -12,6 +12,7 @@ import type { Logger } from "../logger.server.ts";
 import { decryptUserEmail } from "../repositories/user-repository.server.ts";
 import { sendEmail } from "./email/email-service.server.ts";
 import {
+  accountDeletionEmail,
   listingExpiringEmail,
   listingPublishedEmail,
   listingSuspendedEmail,
@@ -279,4 +280,44 @@ export async function notifyExpiringListings(options: {
     if (result.sent) sent += 1;
   }
   return sent;
+}
+
+/**
+ * 退会のお申し込みを受け付けたことを本人へ知らせる。
+ *
+ * ★以前は送っていなかった。★ テンプレートは書いてあったのに呼ぶ場所が無く、
+ * 退会画面が約束していた「取り消しの案内をメールでお送りします」が
+ * 果たされていなかった（2026-08-17 の点検で発覚）。
+ * 冪等キーは依頼ごと。取り消して申し込み直せば、もう一度届く。
+ */
+export async function notifyAccountDeletionRequested(options: {
+  db: Db;
+  env: AppEnv;
+  logger: Logger;
+  userId: string;
+  requestId: string;
+  scheduledPurgeAt: Date;
+}): Promise<void> {
+  const { db, env, logger, userId } = options;
+  const recipient = await recipientEmail(db, env, userId);
+  if (!recipient) return;
+
+  await sendEmail(
+    {
+      template: "account_deletion",
+      to: recipient.email,
+      content: accountDeletionEmail({
+        purgeDate: options.scheduledPurgeAt.toLocaleDateString("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }),
+        cancelUrl: new URL("/mypage/delete", env.APP_ORIGIN).toString(),
+      }),
+      idempotencyKey: `account_deletion:${options.requestId}`,
+      userId,
+    },
+    { db, env, logger },
+  );
 }

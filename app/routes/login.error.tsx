@@ -13,7 +13,11 @@ export function loader({ request }: Route.LoaderArgs) {
   const reason = new URL(request.url).searchParams.get("reason") ?? "";
   return {
     // 未知の値をそのまま画面へ出さない（反射型の文字列注入を避ける）。
-    message: REASONS[reason] ?? "ログインを完了できませんでした。",
+    // ★自分のキーだけ。★ 素のオブジェクトを [reason] で引くと prototype まで
+    // 辿り、?reason=toString で関数が返って loader の直列化が落ちる（500）。
+    message: Object.hasOwn(REASONS, reason)
+      ? REASONS[reason]!
+      : "ログインを完了できませんでした。",
   };
 }
 

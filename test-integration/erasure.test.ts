@@ -5,6 +5,7 @@ import {
   accountDeletionRequests,
   emailDeliveryLogs,
   emailVerificationTokens,
+  listingImages,
   listings,
   payments,
   users,
@@ -21,8 +22,12 @@ import type { Db } from "~/server/db.server";
 import {
   requestAccountDeletion,
 } from "~/server/repositories/user-repository.server";
-import { purgeDueAccounts } from "~/server/services/erasure-service.server";
+import {
+  closeListingsOnDeletionRequest,
+  purgeDueAccounts,
+} from "~/server/services/erasure-service.server";
 import { expireDueListings } from "~/server/services/listing-service.server";
+import { notifyAccountDeletionRequested } from "~/server/services/notification-service.server";
 import {
   closeTestDb,
   makeDraft,
@@ -72,6 +77,76 @@ describe("退会の申し込み", () => {
       .where(eq(accountDeletionRequests.userId, user.id));
     expect(rows).toHaveLength(1);
   });
+
+  it("連打の2回目以降は最初の依頼を返す（予定日がずれない）", async () => {
+    const user = await makeUser(db, "same-date@example.test");
+    const first = await requestAccountDeletion(db, user.id);
+    const second = await requestAccountDeletion(db, user.id);
+    expect(second.id).toBe(first.id);
+    expect(second.scheduledPurgeAt.getTime()).toBe(first.scheduledPurgeAt.getTime());
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+  });
+
+  it("★申し込んだ時点で公開中の投稿が終了する（30日間出続けない）★", async () => {
+    /*
+     * 画面で「お申し込みの時点で掲載を終了します」と約束している。
+     * 関数はあったのに呼んでおらず、嫌がらせが理由で退会する人の掲載に
+     * 30日間問い合わせが届き続けた。
+     */
+    const user = await makeUser(db, "close-on-request@example.test");
+    const live = await makeDraft(db, user.id, {
+      status: "published",
+      publishedAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 86_400_000),
+    });
+    const draft = await makeDraft(db, user.id, { status: "draft" });
+
+    const closed = await closeListingsOnDeletionRequest(db, user.id);
+    expect(closed).toBe(1);
+
+    const [liveRow] = await db
+      .select({ status: listings.status, closedAt: listings.closedAt })
+      .from(listings)
+      .where(eq(listings.id, live));
+    expect(liveRow!.status).toBe("closed");
+    expect(liveRow!.closedAt).not.toBeNull();
+    // 下書きは触らない（消すのは30日後）。
+    const [draftRow] = await db
+      .select({ status: listings.status })
+      .from(listings)
+      .where(eq(listings.id, draft));
+    expect(draftRow!.status).toBe("draft");
+  });
+
+  it("★取り消しの案内が本人へ届く★（テンプレートだけあって送っていなかった）", async () => {
+    const user = await makeUser(db, "notify-deletion@example.test");
+    const deletion = await requestAccountDeletion(db, user.id);
+
+    await notifyAccountDeletionRequested({
+      db,
+      env,
+      logger: testLogger,
+      userId: user.id,
+      requestId: deletion.id,
+      scheduledPurgeAt: deletion.scheduledPurgeAt,
+    });
+    // 同じ依頼でもう一度呼んでも二重には送らない。
+    await notifyAccountDeletionRequested({
+      db,
+      env,
+      logger: testLogger,
+      userId: user.id,
+      requestId: deletion.id,
+      scheduledPurgeAt: deletion.scheduledPurgeAt,
+    });
+
+    const sent = await db
+      .select({ id: emailDeliveryLogs.id })
+      .from(emailDeliveryLogs)
+      .where(eq(emailDeliveryLogs.template, "account_deletion"));
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe("★30日後の実削除★", () => {
@@ -109,6 +184,89 @@ describe("★30日後の実削除★", () => {
         .from(listings)
         .where(eq(listings.ownerId, user.id)),
     ).toHaveLength(0);
+  });
+
+  it("★写真の実体（R2）も消える。行だけ消えて実体が残らない★", async () => {
+    /*
+     * 以前は行に「削除待ち」の印をつけて別の定期処理に任せていたが、
+     * 直後の投稿の物理削除で listing_images が連鎖削除され、印ごと消えていた。
+     * R2 のオブジェクトだけが永久に取り残され、DB から辿る手段も無い。
+     */
+    const user = await makeUser(db, "purge-images@example.test");
+    const listingId = await makeDraft(db, user.id);
+    const keys = [`listings/${listingId}/a`, `listings/${listingId}/b`];
+    for (const [i, objectKey] of keys.entries()) {
+      await db.insert(listingImages).values({
+        id: ulid(),
+        listingId,
+        objectKey,
+        contentType: "image/jpeg",
+        byteSize: 1000,
+        width: 100,
+        height: 100,
+        checksumSha256: "0".repeat(64),
+        position: i,
+      });
+    }
+
+    const deleted: string[] = [];
+    const envWithMedia = {
+      ...env,
+      MEDIA: {
+        delete: (key: string) => {
+          deleted.push(key);
+          return Promise.resolve();
+        },
+      } as unknown as R2Bucket,
+    };
+
+    await requestAccountDeletion(db, user.id);
+    await db
+      .update(accountDeletionRequests)
+      .set({ scheduledPurgeAt: new Date(Date.now() - 1000) })
+      .where(eq(accountDeletionRequests.userId, user.id));
+
+    const result = await purgeDueAccounts({ db, env: envWithMedia, logger: testLogger });
+    expect(result.purged).toBe(1);
+    expect(deleted.sort()).toEqual(keys.sort());
+    expect(await db.select().from(listingImages)).toHaveLength(0);
+  });
+
+  it("★R2 が消せない日はその人を見送る（DB を先に消さない）★", async () => {
+    // DB を先に消すと、実体を辿る手段が二度と無くなる。明日また試す。
+    const user = await makeUser(db, "purge-r2-down@example.test");
+    const listingId = await makeDraft(db, user.id);
+    await db.insert(listingImages).values({
+      id: ulid(),
+      listingId,
+      objectKey: `listings/${listingId}/a`,
+      contentType: "image/jpeg",
+      byteSize: 1000,
+      width: 100,
+      height: 100,
+      checksumSha256: "0".repeat(64),
+    });
+    const brokenMedia = {
+      ...env,
+      MEDIA: {
+        delete: () => Promise.reject(new Error("R2 unavailable")),
+      } as unknown as R2Bucket,
+    };
+
+    await requestAccountDeletion(db, user.id);
+    await db
+      .update(accountDeletionRequests)
+      .set({ scheduledPurgeAt: new Date(Date.now() - 1000) })
+      .where(eq(accountDeletionRequests.userId, user.id));
+
+    const result = await purgeDueAccounts({ db, env: brokenMedia, logger: testLogger });
+    expect(result.purged).toBe(0);
+    expect(result.failed).toBe(1);
+    // 本人も投稿も残っている（明日やり直せる）。
+    expect(
+      await db.select({ id: users.id }).from(users).where(eq(users.id, user.id)),
+    ).toHaveLength(1);
+    expect(await db.select().from(listingImages)).toHaveLength(1);
   });
 
   it("★email_hmac で紐づく行も消える（user_id だけだと消し残る）★", async () => {

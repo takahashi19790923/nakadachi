@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { redirect } from "react-router";
 
-import { LISTING_DURATION_DAYS_DEFAULT } from "~/domain/pricing";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
@@ -38,11 +37,13 @@ export async function action({ request, context: rawContext, params }: Route.Act
     );
     await enforceRateLimit(context.getDb(), "checkoutCreate", user.id);
 
-    const rawDuration = Number(formData.get("durationDays"));
-    const durationDays = Number.isFinite(rawDuration)
-      ? rawDuration
-      : LISTING_DURATION_DAYS_DEFAULT;
-
+    /*
+     * ★掲載期間はフォームから受け取らない。★ 投稿に保存してある
+     * duration_days を決済側が読む。以前はここで受けた値をそのまま
+     * Stripe の metadata に載せて Webhook で使っていたので、フォームを
+     * 書き換えれば 110円で任意の日数（0日＝公開した瞬間に終了、
+     * 36500日＝100年）にできた。2026-08-17 の点検で発覚。
+     */
     const { redirectUrl } = await startListingCheckout({
       db: context.getDb(),
       env: context.env,
@@ -50,7 +51,6 @@ export async function action({ request, context: rawContext, params }: Route.Act
       request,
       listingId: params.listingId,
       userId: user.id,
-      durationDays,
     });
 
     /*
