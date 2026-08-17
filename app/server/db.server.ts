@@ -51,8 +51,13 @@ export function createRequestDb(env: AppEnv): {
          * 使い回すので、リクエストごとに新しい TCP/TLS を張らない。
          * ドライバは node-postgres（Cloudflare の案内どおり。nodejs_compat が要る）。
          * Pool 自体はリクエストごとに作る（Workers の I/O 共有禁止は変わらない）。
-         * max: 1 — 1リクエストの中は直列で足りる。増やしても Hyperdrive 側の
-         * 接続を食うだけ。
+         * ★max は 1 にしない。★ ローダーは独立した問い合わせを Promise.all で
+         * 同時に投げている（一覧＝行＋件数、詳細＝本文＋写真、管理＝4本）。
+         * 接続が1本だと同じ接続に並ぶだけで、直列と同じ往復回数になる。
+         * 5 は1リクエスト内の同時実行の最大（管理ダッシュボードの4本）＋1。
+         * 使う分だけ遅延で張られ、Hyperdrive までは Cloudflare 内なので安い。
+         * トランザクション中に別の問い合わせが走っても、1本では
+         * ★互いに待ち合って固まる★（pg の Pool は空きが出るまで待つ）。
          *
          * 経緯: 2026-08-17 夜、Cloudflare（NRT）→ Neon（シンガポール）への
          * 直接接続が 2〜40秒に振れる時間帯が2時間以上続いた。HTTP でも
@@ -61,7 +66,7 @@ export function createRequestDb(env: AppEnv): {
          */
         const pgPool = new pg.Pool({
           connectionString: env.HYPERDRIVE.connectionString,
-          max: 1,
+          max: 5,
         });
         pool = pgPool;
         db = asDb(drizzlePg(pgPool, { schema, casing: "snake_case" }));
