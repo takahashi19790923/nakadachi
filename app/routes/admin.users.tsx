@@ -75,11 +75,21 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       return { message: "停止の理由を5文字以上で入力してください。", fields: null };
     }
 
-    await setUserStatus(db, {
+    /*
+     * ★当たったかどうかを必ず確かめる。★ ULID として正しくても、その
+     * 利用者が居るとは限らない。素通りさせると下の記録だけが残り、
+     * 「停止した」という嘘の履歴ができる。
+     */
+    const changed = await setUserStatus(db, {
       userId,
       status: intent === "restore" ? "active" : "suspended",
       reason: intent === "restore" ? null : reason,
     });
+    if (!changed) {
+      throw new AppError("not_found", "対象の利用者が見つかりませんでした。", {
+        detail: `user not found for admin ${intent}: ${userId}`,
+      });
+    }
 
     // ★停止したら、その場で全セッションを失効させる。★
     // 止めても入ったままでは意味がない。
@@ -123,6 +133,11 @@ export default function AdminUsers({
       <h1 className="text-2xl font-bold text-washi-900">ユーザー一覧（管理）</h1>
       <p className="mt-2 text-sm text-washi-600">
         メールアドレスは暗号化して保存しており、この画面には表示されません。
+      </p>
+      <p className="mt-2 text-sm text-washi-700">
+        利用を停止すると、<strong>その人の掲載はすべて公開ページから消え、
+        ログイン中の端末もその場で切断されます。</strong>
+        再開すると掲載も元に戻ります（掲載料の返金は行われません）。
       </p>
 
       <ErrorSummary message={actionData?.message} fields={actionData?.fields} />

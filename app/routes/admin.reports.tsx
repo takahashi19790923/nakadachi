@@ -67,12 +67,17 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       return { message: "対応の記録を3文字以上で入力してください。" };
     }
 
-    await resolveReport(db, {
+    // ★当たったかどうかを必ず確かめる。★ 素通りさせると「対応しました」と
+    // 出るのに通報は未対応のまま残り、対応漏れが隠れる。
+    const resolved = await resolveReport(db, {
       reportId,
       status,
       adminId: admin.id,
       note,
     });
+    if (!resolved) {
+      return { message: "対象の通報が見つかりませんでした。" };
+    }
 
     await writeAdminAction(db, {
       adminId: admin.id,

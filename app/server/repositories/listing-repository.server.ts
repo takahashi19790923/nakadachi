@@ -134,6 +134,28 @@ function publishedOnly() {
     eq(listings.status, "published"),
     isNull(listings.deletedAt),
     sql`(${listings.expiresAt} is null or ${listings.expiresAt} > now())`,
+    /*
+     * ★投稿者が停止されていたら、その投稿も出さない。★
+     *
+     * 詐欺の疑いで利用者を止めるのに掲載が出たままでは、止めた意味がない。
+     * 本人はログインできないので自分で取り下げることもできず、問い合わせ
+     * だけが届き続ける。管理者に「利用者を止める」「投稿を1件ずつ止める」の
+     * 二度手間を強いるのも危うい。急いでいるときほど片方を忘れる。
+     * （2026-08-17 に発覚。管理画面の経路を実際に通して初めて分かった）
+     *
+     * 掲載側の status は触らない。復帰させたときに元の状態へそのまま戻る。
+     * 掲載を suspended にしてしまうと、どれが利用者停止の巻き添えで、
+     * どれが投稿そのものの問題だったのか区別できなくなる。
+     *
+     * join ではなく exists にしてあるのは、この関数を使う4か所の
+     * クエリが users を結合していないため。主キー引きなので安い。
+     */
+    sql`exists (
+      select 1 from users u
+      where u.id = ${listings.ownerId}
+        and u.status = 'active'
+        and u.deleted_at is null
+    )`,
   );
 }
 
