@@ -210,12 +210,12 @@ export async function setUserStatus(
 export async function requestAccountDeletion(
   db: Db,
   userId: string,
-): Promise<{ scheduledPurgeAt: Date }> {
+): Promise<{ id: string; scheduledPurgeAt: Date; created: boolean }> {
   const scheduledPurgeAt = new Date(
     Date.now() + DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000,
   );
 
-  await db
+  const inserted = await db
     .insert(accountDeletionRequests)
     .values({
       id: ulid(),
@@ -225,7 +225,21 @@ export async function requestAccountDeletion(
     // 部分一意索引により、保留中の依頼は1件だけ。連打しても増えない。
     .onConflictDoNothing();
 
-  return { scheduledPurgeAt };
+  /*
+   * ★実際に保留中の行を返す。★ 連打で2回目が来たとき、計算し直した日付を
+   * 返すと画面とメールの「削除予定日」が最初の依頼とずれる。
+   * 冪等キー（依頼ID）にも使うので、行の ID が要る。
+   */
+  const pending = await getPendingDeletionRequest(db, userId);
+  if (!pending) {
+    // 挿入と読み戻しの間に取り消された場合。呼び出し側は「保留なし」として扱えばよい。
+    throw new Error("deletion request vanished between insert and read");
+  }
+  return {
+    id: pending.id,
+    scheduledPurgeAt: pending.scheduledPurgeAt,
+    created: (inserted.rowCount ?? 0) > 0,
+  };
 }
 
 export async function getPendingDeletionRequest(db: Db, userId: string) {

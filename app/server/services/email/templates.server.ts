@@ -301,18 +301,23 @@ export function accountDeletionEmail(options: {
  * 件名を日本語にしていないのは、受信箱で絞り込みやすくするため。
  */
 export function opsPaymentAlertEmail(options: {
-  kind: "paid_not_published" | "refunded_but_live";
+  kind: "paid_not_published" | "refunded_but_live" | "failed_webhooks";
   listingTitle: string;
   listingStatus: string;
   adminUrl: string;
 }): EmailContent {
-  const paid = options.kind === "paid_not_published";
-  const heading = paid
-    ? "決済は成立したが掲載が出ていない"
-    : "返金済みなのに掲載が続いている";
-  const detail = paid
-    ? "利用者は110円を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。"
-    : "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。";
+  const heading =
+    options.kind === "paid_not_published"
+      ? "決済は成立したが掲載が出ていない"
+      : options.kind === "refunded_but_live"
+        ? "返金済みなのに掲載が続いている"
+        : "処理できていない決済通知がある";
+  const detail =
+    options.kind === "paid_not_published"
+      ? "利用者は110円を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。"
+      : options.kind === "refunded_but_live"
+        ? "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。"
+        : "Stripe からの通知を受け取ったのに処理を終えられていないものがあります。Stripe には 200 を返しているので再送されず、投稿側にも痕跡が残らない場合があります（決済記録の作成に失敗した Session など）。payment_webhook_events を確認してください。";
 
   const { html, text } = layout({
     heading,
@@ -336,4 +341,41 @@ export function opsPaymentAlertEmail(options: {
   });
 
   return { subject: `[nakadachi][ops] ${heading}`, html, text };
+}
+
+/**
+ * お問い合わせフォームの転送（運営者宛）。
+ *
+ * ★以前は送っていなかった。★ 画面には「受け付けました。ご返信します」と
+ * 出しながら、残るのは件名と本文の文字数だけで、本文は誰にも届かず
+ * 復元もできなかった（2026-08-17 の点検で発覚）。詐欺の通報や法的な相談が
+ * ここに来る。送れなかったときは画面にもそう出す（contact.tsx）。
+ *
+ * 本文は利用者の入力そのもの。★必ずエスケープする。★
+ */
+export function contactInboundEmail(options: {
+  fromEmail: string;
+  subject: string;
+  body: string;
+}): EmailContent {
+  const { html, text } = layout({
+    heading: "お問い合わせが届きました",
+    bodyHtml: `
+      <p style="margin:0 0 12px">差出人: ${escapeHtml(options.fromEmail)}<br>
+      件名: ${escapeHtml(options.subject)}</p>
+      <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:inherit;background:#f7f5ef;padding:12px;border-radius:8px">${escapeHtml(options.body)}</pre>
+      <p style="margin:12px 0 0;font-size:13px;color:#6d6759">
+        このメールにそのまま返信すると差出人へ届きます（Reply-To を差出人にしてあります）。
+      </p>`,
+    bodyText: [
+      `差出人: ${options.fromEmail}`,
+      `件名: ${options.subject}`,
+      "",
+      options.body,
+      "",
+      "このメールにそのまま返信すると差出人へ届きます。",
+    ].join("\n"),
+  });
+
+  return { subject: `[nakadachi][問い合わせ] ${options.subject}`, html, text };
 }

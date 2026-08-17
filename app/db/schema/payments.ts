@@ -65,6 +65,8 @@ export const payments = pgTable(
     uniqueIndex("payments_payment_intent_id_key").on(t.paymentIntentId),
     index("payments_listing_idx").on(t.listingId),
     index("payments_user_created_idx").on(t.userId, t.createdAt.desc()),
+    // 管理画面の全件一覧は created_at だけで並べる。(user_id, created_at) は使えない。
+    index("payments_created_idx").on(t.createdAt.desc()),
     index("payments_status_idx").on(t.status),
     index("payments_charge_id_idx").on(t.chargeId),
   ],

@@ -141,6 +141,8 @@ export const emailVerificationTokens = pgTable(
     uniqueIndex("evt_token_hash_key").on(t.tokenHash),
     index("evt_email_hmac_purpose_idx").on(t.emailHmac, t.purpose),
     index("evt_expires_at_idx").on(t.expiresAt),
+    // 外部キーの参照側。無いと退会時の連鎖削除が表全体を走査する。
+    index("evt_user_id_idx").on(t.userId),
   ],
 );
 

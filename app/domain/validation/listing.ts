@@ -55,6 +55,13 @@ const baseFields = {
   prefectureCode: locationCodeSchema,
   cityCode: locationCodeSchema,
   areaNote: areaNoteSchema.optional(),
+  /*
+   * 任意にしてある理由: 公開中の投稿の編集画面は期間欄を出さない
+   * （公開後は変えられない）ので、送られてこない。必須のままだと
+   * ★公開中の投稿は一切編集できない★（2026-08-17 の点検で発覚。
+   * 誤字を直そうとすると開発者向けの検証エラーが出て保存できなかった）。
+   * 省略時は保存側が既定値を使い、公開中なら保存済みの値を保つ。
+   */
   durationDays: z.coerce
     .number()
     .int()
@@ -62,7 +69,8 @@ const baseFields = {
       (value) =>
         (LISTING_DURATION_DAYS_CHOICES as readonly number[]).includes(value),
       { message: "掲載期間の指定が不正です" },
-    ),
+    )
+    .optional(),
 };
 
 /** 価格。無料なら金額欄を見ない。相談なら金額は任意 */

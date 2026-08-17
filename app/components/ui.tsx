@@ -4,6 +4,7 @@ import {
   LISTING_STATUS_LABEL,
   type ListingStatus,
 } from "~/domain/listing-status";
+import { formatJpy, LISTING_FEE_JPY } from "~/domain/pricing";
 
 /** 投稿の状態。色だけで区別させない（必ず文字を添える） */
 export function StatusBadge({ status }: { status: ListingStatus }) {
@@ -119,16 +120,21 @@ export function Pagination({
   );
 }
 
-/** 掲載料の案内。決済に関わる画面では必ず出す */
+/**
+ * 掲載料の案内。決済に関わる画面では必ず出す。
+ * ★金額は定数から出す。★ ここだけ「110円」を直書きしていたので、
+ * 値上げしたときに決済ボタンの真上だけ古い金額が残る形だった。
+ */
 export function FeeNotice() {
+  const fee = formatJpy(LISTING_FEE_JPY);
   return (
     <div className="card mt-4 border-ai-200 bg-ai-50 p-4">
       <p className="font-semibold text-ai-900">掲載料について</p>
       <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-ai-900">
-        <li>掲載時に1件あたり110円（税込）をいただきます。</li>
+        <li>掲載時に1件あたり{fee}（税込）をいただきます。</li>
         <li>下書きの保存では課金されません。</li>
         <li>公開後の内容の修正で、あらためて課金されることはありません。</li>
-        <li>成約手数料・月額料金など、110円以外の料金は一切かかりません。</li>
+        <li>成約手数料・月額料金など、{fee}以外の料金は一切かかりません。</li>
         <li>自動で更新・課金されることはありません。</li>
       </ul>
     </div>

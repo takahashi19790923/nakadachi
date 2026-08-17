@@ -69,6 +69,41 @@ describe("投稿の入力検証", () => {
     }
   });
 
+  it("★掲載期間が無くても通る（公開中の編集は欄を送らない）★", () => {
+    /*
+     * 必須にしていたころ、公開中の投稿の編集画面は期間欄を出さないので
+     * 送られてこず、誤字を直すだけの保存が「数値が期待されましたが、
+     * NaN が入力されました」で必ず落ちた。★公開中の投稿は一切編集できない★
+     * 状態が本番にあった（2026-08-17 の点検で発覚）。
+     */
+    const { durationDays: _omit, ...withoutDuration } = baseInput({
+      categorySlug: "sell-buy",
+      kind: "sell",
+      priceType: "fixed",
+      priceJpy: "3000",
+      itemCondition: "good",
+      handoverMethod: "pickup",
+    });
+    const result = listingInputSchema.safeParse(withoutDuration);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.durationDays).toBeUndefined();
+  });
+
+  it("掲載期間は選択肢の中だけ", () => {
+    const bad = listingInputSchema.safeParse(
+      baseInput({
+        categorySlug: "sell-buy",
+        kind: "sell",
+        priceType: "fixed",
+        priceJpy: "3000",
+        itemCondition: "good",
+        handoverMethod: "pickup",
+        durationDays: "36500",
+      }),
+    );
+    expect(bad.success).toBe(false);
+  });
+
   it("★固定価格なのに金額が空なら落とす★", () => {
     const result = listingInputSchema.safeParse(
       baseInput({

@@ -23,18 +23,32 @@ export interface ListFilters {
   page: number;
 }
 
+/** パスで固定される条件。ページ送りの URL でクエリに重ねない */
+export type PathLockedFilter = "category" | "pref" | "city";
+
 /**
  * 現在の絞り込みを保ったまま、ページ番号だけを変えた URL を作る。
- * パスで固定されている条件（カテゴリ・地域）は basePath 側に含まれるので、
- * クエリには入れない。
+ *
+ * ★カテゴリ・地域もクエリへ入れる。★ ただし basePath に含まれているもの
+ * （/c/:slug のカテゴリ、/area/:code の地域）は locked で除く。
+ * 以前は「カテゴリと地域は basePath 側に含まれる」と決め打ちして
+ * 一切入れていなかったので、★/search?category=job&pref=13 の2ページ目が
+ * 全件の2ページ目になり、見出しの件数だけが絞り込み後のまま★だった
+ * （2026-08-17 の点検で発覚）。
  */
 export function buildPageHref(
   basePath: string,
   filters: ListFilters,
   page: number,
+  locked: readonly PathLockedFilter[] = [],
 ): string {
   const params = new URLSearchParams();
   if (filters.q) params.set("q", filters.q);
+  if (filters.category && !locked.includes("category")) {
+    params.set("category", filters.category);
+  }
+  if (filters.pref && !locked.includes("pref")) params.set("pref", filters.pref);
+  if (filters.city && !locked.includes("city")) params.set("city", filters.city);
   if (filters.kind) params.set("kind", filters.kind);
   if (filters.min !== undefined) params.set("min", String(filters.min));
   if (filters.max !== undefined) params.set("max", String(filters.max));

@@ -56,7 +56,6 @@ export async function startListingCheckout(options: {
   request: Request;
   listingId: string;
   userId: string;
-  durationDays: number;
 }): Promise<CheckoutStartResult> {
   const { db, env, logger, listingId, userId } = options;
 
@@ -66,6 +65,7 @@ export async function startListingCheckout(options: {
       ownerId: listings.ownerId,
       status: listings.status,
       title: listings.title,
+      durationDays: listings.durationDays,
     })
     .from(listings)
     .where(eq(listings.id, listingId))
@@ -136,7 +136,10 @@ export async function startListingCheckout(options: {
       listing_id: listingId,
       user_id: userId,
       payment_id: paymentId,
-      duration_days: String(options.durationDays),
+      // 記録用。★公開時の日数はここからは読まない。★ 行の duration_days が正
+      // （transitionListing）。フォーム由来の値を信じていた頃の名残で、
+      // Stripe の画面から「何日で売ったか」を追えるようにだけ残している。
+      duration_days: String(listing.durationDays),
     },
     expiresAt,
     // 画面の連打で Session が二重にできるのを Stripe 側でも止める。
@@ -508,14 +511,22 @@ async function handleSessionSucceeded(options: {
     });
   }
 
-  const durationDays = Number(metadata.duration_days);
   const paymentIntentId = readString(session, "payment_intent");
 
   // ★決済記録と公開を同じトランザクションで更新する。★
   // 片方だけ成立すると「課金したのに公開されない」「無料で公開された」になる。
   let published = false;
   await db.transaction(async (tx) => {
-    await tx
+    /*
+     * ★状態を WHERE に入れる。★ 上の返金済み判定は少し前に読んだ写しを
+     * 見ている。その直後に charge.refunded が別のイベントとして着いて
+     * refunded に変えていると、ここで無条件に succeeded を書き戻し、
+     * 返金したのに公開する。返金の側は条件付き UPDATE で守ってあるので、
+     * こちらも同じ形にする。当たらなければ「もう別の状態へ進んだ」で止める。
+     * すでに succeeded（同じ支払いの別イベント）は通す。冪等に公開済みを
+     * 確かめる下のループが受け止める。
+     */
+    const claimed = await tx
       .update(payments)
       .set({
         status: "succeeded",
@@ -523,7 +534,17 @@ async function handleSessionSucceeded(options: {
         paymentIntentId,
         updatedAt: new Date(),
       })
-      .where(eq(payments.id, payment.id));
+      .where(
+        and(
+          eq(payments.id, payment.id),
+          inArray(payments.status, ["created", "pending", "succeeded"]),
+        ),
+      );
+    if ((claimed.rowCount ?? 0) === 0) {
+      throw new AppError("conflict", "掲載を公開できませんでした。", {
+        detail: `payment moved to a terminal state before publish: ${payment.id}`,
+      });
+    }
 
     /*
      * ★どこから公開できたかを必ず確かめる。★
@@ -549,7 +570,8 @@ async function handleSessionSucceeded(options: {
         // ★ここだけが payment を渡してよい場所。★ 金額・通貨・metadata の
         // 照合を終えた、署名検証済み Webhook の支払い成立処理。
         actor: "payment",
-        durationDays: Number.isFinite(durationDays) ? durationDays : undefined,
+        // 日数は渡さない。行の duration_days を transitionListing が読む。
+        // metadata.duration_days は記録用で、公開の判断には使わない。
         expectedFrom: from,
         tx,
       });
@@ -884,10 +906,21 @@ async function handleDispute(options: {
   const payment = await findPaymentByIntent(db, paymentIntentId);
   if (!payment) return;
 
+  /*
+   * 返金済みの上には書かない。返金が確定したあとに申し立てが届くことは
+   * ある（利用者が返金前にカード会社へ連絡していた場合）。無条件に
+   * disputed で上書きすると、返金の記録が状態から消え、突き合わせ
+   * （refunded_but_live）の対象からも外れる。
+   */
   await db
     .update(payments)
     .set({ status: "disputed", updatedAt: new Date() })
-    .where(eq(payments.id, payment.id));
+    .where(
+      and(
+        eq(payments.id, payment.id),
+        inArray(payments.status, ["created", "pending", "succeeded", "partially_refunded"]),
+      ),
+    );
 
   const suspended = await transitionListing(db, {
     listingId: payment.listingId,

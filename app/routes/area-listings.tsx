@@ -85,7 +85,7 @@ export default function AreaListings({ loaderData }: Route.ComponentProps) {
       <Pagination
         page={result.page}
         totalPages={result.totalPages}
-        buildHref={(page) => buildPageHref(basePath, filters, page)}
+        buildHref={(page) => buildPageHref(basePath, filters, page, ["pref"])}
       />
     </div>
   );

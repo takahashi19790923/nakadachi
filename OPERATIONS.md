@@ -163,7 +163,7 @@ where status = 'failed' group by template, error_code;
 
 | 対象 | 方法 | 保持 |
 |---|---|---|
-| DB | **Neon の PITR**（Point-in-Time Restore） | プランに依存（無料は24時間、有料は7〜30日） |
+| DB | **Neon の PITR**（Point-in-Time Restore） | プランに依存。**本番（Free）は 6時間**（`history_retention_seconds: 21600` を 2026-08-17 に API で実測。「24時間」ではない） |
 | DB | 週1回の論理バックアップ（下記） | 手元または別のストレージで90日 |
 | R2 | バージョニングは既定で無効 | 下記の注意 |
 | コード | GitHub | — |

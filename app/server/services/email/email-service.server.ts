@@ -4,7 +4,7 @@ import { emailDeliveryLogs } from "~/db/schema/index.ts";
 import { ulid } from "~/domain/ulid.ts";
 import { emailIndexHmac } from "../../crypto.server.ts";
 import type { Db } from "../../db.server.ts";
-import { hasSecret, requireSecret, type AppEnv } from "../../env.server.ts";
+import { hasSecret, isProduction, requireSecret, type AppEnv } from "../../env.server.ts";
 import { maskEmail, type Logger } from "../../logger.server.ts";
 import type { EmailContent } from "./templates.server.ts";
 
@@ -37,7 +37,9 @@ export type EmailTemplateName =
    * 決済は成立したのに掲載が出ていない、返金したのに掲載が続いている、
    * といった「どちらの画面にもエラーが出ない壊れ方」を知らせる。
    */
-  | "ops_payment_alert";
+  | "ops_payment_alert"
+  /** お問い合わせフォームの内容を運営者へ転送する。利用者へは送らない */
+  | "contact_inbound";
 
 export interface SendEmailOptions {
   template: EmailTemplateName;
@@ -51,6 +53,11 @@ export interface SendEmailOptions {
   idempotencyKey: string;
   userId?: string;
   listingId?: string;
+  /**
+   * 返信先を差し替えたいとき（お問い合わせの転送で、運営者がそのまま
+   * 「返信」を押せば相手に届くようにする）。既定は EMAIL_REPLY_TO。
+   */
+  replyTo?: string;
 }
 
 export interface SendEmailResult {
@@ -63,6 +70,15 @@ export async function sendEmail(
   deps: { db: Db; env: AppEnv; logger: Logger },
 ): Promise<SendEmailResult> {
   const { db, env, logger } = deps;
+
+  /*
+   * ★本番では鍵が無ければ黙って飛ばさない。★ 鍵の投入漏れでログインコードが
+   * 1通も届かない状態が「送信済み（skipped）」として静かに続くのを防ぐ。
+   * requireSecret は ConfigurationError（503）を投げるので、監視の
+   * /api/config と画面の両方で表面化する。記録を作る前に見る（queued の
+   * 行を残さない）。ローカルと preview は下の分岐で「送らずに記録だけ」。
+   */
+  if (isProduction(env)) requireSecret(env, "RESEND_API_KEY");
 
   const recipientHmac = await emailIndexHmac(
     requireSecret(env, "EMAIL_INDEX_KEY"),
@@ -94,7 +110,7 @@ export async function sendEmail(
   }
 
   // ローカル開発では鍵を入れずに動かせるようにする。実際には送らず、
-  // 宛先をマスクしたログだけを残す（本文は出さない）。
+  // 宛先をマスクしたログだけを残す（本文は出さない）。本番は上で弾いてある。
   if (!hasSecret(env, "RESEND_API_KEY")) {
     logger.warn("email not sent: RESEND_API_KEY is not configured", {
       template: options.template,
@@ -120,7 +136,7 @@ export async function sendEmail(
       body: JSON.stringify({
         from: env.MAIL_FROM,
         to: [options.to],
-        reply_to: env.EMAIL_REPLY_TO,
+        reply_to: options.replyTo ?? env.EMAIL_REPLY_TO,
         subject: options.content.subject,
         html: options.content.html,
         text: options.content.text,

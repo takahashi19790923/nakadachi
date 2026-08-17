@@ -165,14 +165,26 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
             className="mt-6"
           >
             <CsrfInput token={csrfToken} />
-            <input type="hidden" name="durationDays" value="30" />
+            {/*
+              掲載期間はフォームで送らない。投稿に保存してある値を
+              決済側が読む（書き換えられる値を公開の判断に使わない）。
+              ここでは確認のために表示だけする。
+            */}
 
             <p className="text-lg font-bold text-washi-900">
               お支払い金額：{formatJpy(LISTING_FEE_JPY)}（税込）
             </p>
+            <p className="mt-1 text-sm text-washi-700">
+              掲載期間：{listing.durationDays}日間（公開した日から。自動更新はありません）
+            </p>
             <p className="mt-1 text-sm text-washi-600">
               次の画面（Stripe）でお支払い方法を入力します。
               お支払いが確認できた時点で投稿が公開されます。
+              期間を変えたい場合は、お支払いの前に
+              <Link to={`/listings/${listing.id}/edit`} className="link mx-1">
+                編集
+              </Link>
+              から選び直してください。
             </p>
 
             {fetcher.data?.message ? (

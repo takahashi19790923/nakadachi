@@ -195,6 +195,13 @@ export interface ListingSearchParams {
   keyword?: string;
   minPriceJpy?: number;
   maxPriceJpy?: number;
+  /**
+   * この ID の中だけを引く（お気に入り用）。空配列なら結果は空。
+   * ★お気に入りを「新着200件の中から探す」で作っていた頃、201件目以降の
+   * 掲載をお気に入りにした人には「掲載終了」と表示された。★ 公開中なのに。
+   * SQL で絞る。
+   */
+  ids?: readonly string[];
   sort: ListingSort;
   page: number;
   perPage: number;
@@ -220,6 +227,12 @@ function escapeLike(value: string): string {
 function buildFilters(params: ListingSearchParams) {
   const conditions = [publishedOnly()];
 
+  if (params.ids) {
+    // 空なら何にも一致させない（inArray に空配列を渡すと壊れる）。
+    conditions.push(
+      params.ids.length > 0 ? inArray(listings.id, [...params.ids]) : sql`false`,
+    );
+  }
   if (params.categorySlug) {
     conditions.push(eq(categories.slug, params.categorySlug));
   }
@@ -305,12 +318,19 @@ async function loadDetail(
     if (visible) conditions.push(visible);
   }
 
-  const rows = await db
+  /*
+   * ★本文と写真は同時に引く。★ 写真の問い合わせは listingId しか使わず、
+   * 本文の結果に依存しない。直列にすると DB との往復が1回増える
+   * （シンガポールまで片道 100〜250ms）。存在しない ID でも写真側の
+   * 問い合わせは走るが、返すのは null のままなので漏れるものは無い。
+   */
+  const rowsPromise = db
     .select({
       ...summaryColumns,
       ownerId: listings.ownerId,
       body: listings.body,
       status: listings.status,
+      durationDays: listings.durationDays,
       viewCount: listings.viewCount,
       createdAt: listings.createdAt,
       moderationReason: listings.moderationReason,
@@ -340,10 +360,7 @@ async function loadDetail(
     .where(and(...conditions))
     .limit(1);
 
-  const row = rows[0];
-  if (!row) return null;
-
-  const images = await db
+  const imagesPromise = db
     .select({
       id: listingImages.id,
       objectKey: listingImages.objectKey,
@@ -358,6 +375,10 @@ async function loadDetail(
       ),
     )
     .orderBy(asc(listingImages.position));
+
+  const [rows, images] = await Promise.all([rowsPromise, imagesPromise]);
+  const row = rows[0];
+  if (!row) return null;
 
   return {
     id: row.id,
@@ -380,6 +401,7 @@ async function loadDetail(
     ownerId: row.ownerId,
     body: row.body,
     status: row.status,
+    durationDays: row.durationDays,
     viewCount: row.viewCount,
     createdAt: row.createdAt.toISOString(),
     moderationReason: row.moderationReason,

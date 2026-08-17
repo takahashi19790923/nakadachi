@@ -58,7 +58,20 @@ export async function setup(): Promise<void> {
 
 export async function teardown(): Promise<void> {
   await server?.stop();
+  /*
+   * ★PGlite を close() すると、プロセスの終了コードが 0 に戻る。★
+   * WASM ランタイム（Emscripten）の終了処理が exit code を上書きするため。
+   * vitest は失敗を exitCode=1 に積んでから teardown を呼ぶので、
+   * ★統合テストが1件落ちても `pnpm run test:integration` は 0 で終わり、
+   * CI は緑のまま★だった（2026-08-17 に発覚。実際に落としてみて確認した。
+   * 単体テストの config には globalSetup が無いので正しく 1 になる）。
+   *
+   * 終了コードを控えてから閉じ、戻す。プロセスはこのあと終わるので、
+   * 閉じ損ねたとしても資源は回収される。
+   */
+  const exitCode = process.exitCode;
   await db?.close();
+  if (exitCode !== undefined) process.exitCode = exitCode;
   server = null;
   db = null;
 }

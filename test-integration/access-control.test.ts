@@ -16,7 +16,11 @@ import {
   sendMessage,
 } from "~/server/services/message-service.server";
 import { transitionListing } from "~/server/services/listing-service.server";
-import { setBlock } from "~/server/services/engagement-service.server";
+import {
+  listFavorites,
+  setBlock,
+  toggleFavorite,
+} from "~/server/services/engagement-service.server";
 import { closeTestDb, makeDraft, makeUser, resetDatabase } from "./helpers.ts";
 
 /**
@@ -458,5 +462,67 @@ describe("★自分の下書きを削除できる★", () => {
     await expect(
       transitionListing(db, { listingId, to: "deleted", actor: "owner" }),
     ).rejects.toThrow();
+  });
+});
+
+describe("★お気に入りの一覧は ID で引く★", () => {
+  it("新着から外れた古い掲載でも、公開中なら出る", async () => {
+    /*
+     * 以前は「新着200件を取ってから JS で突き合わせる」だった。
+     * サイト全体で200件を超えると、古めの掲載をお気に入りにした人には
+     * 公開中なのに「掲載が終了したため表示していません」と出た。
+     */
+    const db = await resetDatabase();
+    const seller = await makeUser(db, "seller-old@example.test");
+    const fan = await makeUser(db, "fan@example.test");
+
+    // 古い掲載を1件、そのあとに新しい掲載を多数。
+    const old = await makeDraft(db, seller.id, {
+      status: "published",
+      publishedAt: new Date(Date.now() - 100 * 86_400_000),
+      expiresAt: new Date(Date.now() + 10 * 86_400_000),
+    });
+    for (let i = 0; i < 5; i++) {
+      await makeDraft(db, seller.id, {
+        status: "published",
+        publishedAt: new Date(),
+        expiresAt: new Date(Date.now() + 30 * 86_400_000),
+      });
+    }
+    // 公開中にお気に入りへ入れたあとで掲載終了したものも1件（件数に出る側）。
+    const closed = await makeDraft(db, seller.id, {
+      status: "published",
+      publishedAt: new Date(Date.now() - 50 * 86_400_000),
+      expiresAt: new Date(Date.now() + 5 * 86_400_000),
+    });
+
+    await toggleFavorite({ db, userId: fan.id, listingId: old, desired: "add" });
+    await toggleFavorite({ db, userId: fan.id, listingId: closed, desired: "add" });
+    await transitionListing(db, { listingId: closed, to: "closed", actor: "owner" });
+
+    const ids = (await listFavorites(db, fan.id)).map((f) => f.listingId);
+    // 「新着N件」に頼らず、ID で絞ったときだけ古い掲載が出る。
+    const result = await searchListings(db, {
+      ids,
+      sort: "newest",
+      page: 1,
+      perPage: 3, // 新着だけ見る実装なら old は落ちる件数
+    });
+    expect(result.items.map((item) => item.id)).toEqual([old]);
+    // 掲載終了したものは公開中でないので出ない。
+    expect(result.total).toBe(1);
+  });
+
+  it("お気に入りが空なら何も一致させない", async () => {
+    const db = await resetDatabase();
+    const seller = await makeUser(db, "seller-empty@example.test");
+    await makeDraft(db, seller.id, {
+      status: "published",
+      publishedAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 86_400_000),
+    });
+    const result = await searchListings(db, { ids: [], sort: "newest", page: 1, perPage: 10 });
+    expect(result.items).toHaveLength(0);
+    expect(result.total).toBe(0);
   });
 });

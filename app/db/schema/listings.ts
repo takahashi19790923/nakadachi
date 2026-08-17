@@ -13,6 +13,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
+import { LISTING_DURATION_DAYS_DEFAULT } from "../../domain/pricing.ts";
 import { softDelete, timestamps, ulidPk, ulidRef } from "./_shared.ts";
 import {
   handoverMethodEnum,
@@ -74,6 +75,21 @@ export const listings = pgTable(
      * 公開する住所の粒度は市区町村までに保つ。
      */
     areaNote: varchar("area_note", { length: 60 }),
+
+    /**
+     * 掲載期間（日数）。投稿フォームで選び、公開時に expires_at へ換算する。
+     *
+     * ★公開時に参照する唯一の正。★ 以前はフォームの値を Checkout の
+     * metadata に載せて Webhook で読み戻していたが、①下書きに保存して
+     * いなかったので確認画面が常に30を送っていた（選んだ期間が捨てられる）
+     * ②確認画面の値を書き換えれば任意の日数で公開できた（110円で100年）。
+     * どちらも 2026-08-17 の点検で発覚。行に持たせて、公開時はここだけ見る。
+     * 選択肢は app/domain/pricing.ts。CHECK 制約にはしない（選択肢を
+     * 変えたときに移行を忘れて Webhook が落ちる罠を避ける）。
+     */
+    durationDays: integer("duration_days")
+      .notNull()
+      .default(LISTING_DURATION_DAYS_DEFAULT),
 
     publishedAt: timestamp("published_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
