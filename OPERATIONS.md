@@ -308,6 +308,7 @@ where code = '<コード>';
 | メールが届かない | `email_delivery_logs` | ドメイン認証、API キー |
 | 画面は出るがボタンが反応しない | `e2e/hydration.spec.ts` | CSP の nonce。**curl では絶対に分からない** |
 | 検索が遅い | 件数 | 2文字以下の語では索引が効かない（ARCHITECTURE.md §6） |
+| DB を使う画面だけ 2〜40秒、規約ページは速い | `/api/health` の `ms`、`wrangler tail` | **Cloudflare → Neon（シンガポール）の経路**。手元の PC から同じ DB を叩いて速ければ Neon 本体ではない。2026-08-17 夜に2時間以上続き、Hyperdrive 経由に切り替えて収まった（DEPLOYMENT.md）。Hyperdrive でも起きたら `wrangler hyperdrive get <id>` と Cloudflare のステータスを見る |
 
 ### 調べ方
 

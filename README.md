@@ -52,7 +52,7 @@
 | 実行環境 | Cloudflare Workers | compatibility_date 2026-08-13 / `nodejs_compat` |
 | フレームワーク | React Router（framework mode, SSR） | 8.3.0 |
 | ビルド | Vite + `@cloudflare/vite-plugin` | 8.2.1 / 1.52.0 |
-| DB | Neon PostgreSQL + `@neondatabase/serverless` | 1.1.0 |
+| DB | Neon PostgreSQL。本番・preview は **Cloudflare Hyperdrive 経由**（`pg` 8.23）、ローカル・テストは `@neondatabase/serverless` 1.1.0 で直接 | — |
 | ORM | Drizzle ORM / drizzle-kit | 0.45.2 / 0.31.10 |
 | 写真 | Cloudflare R2（binding 経由） | — |
 | メール | Resend（HTTP API） | — |
@@ -280,7 +280,7 @@ pnpm run secrets:put -- --env production
 
 | 名前 | 用途 |
 |---|---|
-| `DATABASE_URL` | Neon の pooled 接続文字列 |
+| `DATABASE_URL` | Neon の pooled 接続文字列。★本番・preview では Hyperdrive の binding があれば使われない★（無いときの退避路。DEPLOYMENT.md「Hyperdrive」） |
 | `SESSION_SECRET` | セッションと CSRF トークンの署名鍵 |
 | `EMAIL_ENCRYPTION_KEY` | メールアドレスの暗号化（32バイト base64url） |
 | `EMAIL_INDEX_KEY` | メールアドレスの検索索引（**上とは別の値**） |
