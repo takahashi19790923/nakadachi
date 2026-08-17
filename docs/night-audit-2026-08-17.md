@@ -89,9 +89,10 @@ Cloudflare 拠点で接続を張りっぱなしにして使い回すので、リ
 書き込みの経路は、同じ `pg` + drizzle の組み合わせで統合テスト175件（トランザクション含む）が通っている。
 Hyperdrive を通した実書き込みは preview で確かめた: 詳細ページを3回開いて `view_count` が 1 → 4
 （応答後の UPDATE が Hyperdrive 経由で届いている）。本番も同じコードと自分用の Hyperdrive 設定。
-★本番の定期処理（毎時の UPDATE）は `wrangler tail` が数分で切れて捕まえられなかった。★
-次の :20 JST（19:20 UTC）の日次と合わせて、朝に Cloudflare のダッシュボード（Workers → nakadachi-production → Logs / Cron）で
-「cron finished」が出ているか一度見てほしい。
+本番の定期処理も Hyperdrive 経由で通っている: 17:00 UTC の毎時 cron が `outcome ok / 895ms /
+expireListings=0 reconcilePayments=0`（`wrangler tail` を :59 に張り直して捕まえた。tail は数分で
+黙って切れるので、cron を見るなら直前に張る）。日次（19:20 UTC＝04:20 JST）は朝に
+`wrangler tail nakadachi-production --format pretty` か Cloudflare のダッシュボードで「cron finished」を一度見てほしい。
 
 ## 6. SEO・アクセシビリティ（直した）
 
