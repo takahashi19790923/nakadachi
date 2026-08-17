@@ -171,13 +171,21 @@
 			"triggers": {
 				"crons": ["0 * * * *", "20 19 * * *"]
 			},
-			// preview と同じ（説明はそちら）。ID は `wrangler hyperdrive create nakadachi-production`。
-			// ★キャッシュは切ってある（wrangler hyperdrive update --caching-disabled）。★
-			// 投稿した直後の一覧に最大60秒古い結果が出るのを避けるため。接続の使い回しだけを使う。
+			/*
+			 * ★本番の DB は Supabase（東京 ap-northeast-1）。2026-08-18 に Neon（シンガポール）から移した。★
+			 * ID は `wrangler hyperdrive create nakadachi-production-tokyo --caching-disabled=true`。
+			 * 接続先は Supabase の Direct connection（db.<ref>.supabase.co:5432、プーラーではない）、
+			 * ロールは DDL 無しの nakadachi_app_production（scripts/create-app-role.ts）。
+			 * ★キャッシュは切ってある。★ 投稿した直後の一覧に最大60秒古い結果が出るのを避けるため。
+			 *
+			 * 退避路: 移行元の Neon を指す設定 bc7ebd4ecfdc4b70a4860fb2338418e2 はまだ残してある。
+			 * ID を戻してデプロイすれば Neon に戻る（ただし移行後の書き込みは戻らない）。
+			 * 数日様子を見て Neon のプロジェクトごと消す（DEPLOYMENT.md「Hyperdrive」）。
+			 */
 			"hyperdrive": [
 				{
 					"binding": "HYPERDRIVE",
-					"id": "bc7ebd4ecfdc4b70a4860fb2338418e2"
+					"id": "2a9ea1265a9943fe9f2ff27c26c8dbd1"
 				}
 			],
 			// preview と同じ理由で明示的に閉じる。

@@ -424,19 +424,30 @@ describe("★定期処理が入口から実際に走る★", () => {
       .set({ scheduledPurgeAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
       .where(eq(accountDeletionRequests.userId, user.id));
 
+    /*
+     * バックアップは毎日走る（2026-08-18〜。DB 側に時点復旧が無いため）ので、
+     * R2 の代わりを渡す。書き出しの中身は backup.test.ts が見ている。
+     * ★日付も必ず渡す。★ 省くと実行した日で結果が変わる検査になりうる
+     * （週1回だった頃、月曜だけ落ちるテストを実際に踏んだ）。
+     */
+    const stored = new Map<string, string>();
+    const backups = {
+      put: (key: string, body: string) => {
+        stored.set(key, body);
+        return Promise.resolve(undefined);
+      },
+      list: () =>
+        Promise.resolve({ objects: [...stored.keys()].map((key) => ({ key })) }),
+      delete: (key: string) => {
+        stored.delete(key);
+        return Promise.resolve(undefined);
+      },
+    } as unknown as R2Bucket;
     const result = await runScheduledTasks({
       cron: CRON_DAILY,
       db,
-      env: testEnv(),
+      env: { ...testEnv(), BACKUPS: backups },
       logger: testLogger,
-      /*
-       * ★日付を必ず渡す。★ 省くと実行した日の曜日で結果が変わる。
-       * 月曜だけ週次のバックアップが加わり、testEnv には R2 の binding が
-       * 無いので exportDatabase が失敗して、この検査が落ちる。
-       * ★週に1日だけ落ちるテストは、落ちた日に「たまたま」で片付けられる。★
-       * 実際に月曜に踏んだ（2026-08-17）。バックアップ側は backup.test.ts が
-       * 曜日を指定して検査している。ここは火曜に固定して掃除だけを見る。
-       */
       now: new Date("2026-08-18T19:20:00Z"),
     });
 
@@ -455,8 +466,10 @@ describe("★定期処理が入口から実際に走る★", () => {
 
     // 日次で回すものが全部呼ばれていること（増減したら気づけるように）。
     expect(Object.keys(result).sort()).toEqual([
+      "exportDatabase",
       "markEndedImages",
       "notifyExpiring",
+      "pruneBackups",
       "purgeAccessRecords",
       "purgeAccounts",
       "purgeDeletedImages",

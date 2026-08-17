@@ -157,13 +157,13 @@ describe("古い世代の掃除", () => {
   });
 });
 
-describe("日次の中で週1回だけ書き出す", () => {
+describe("日次の中で毎日書き出す", () => {
   /** UTC 月曜 */
   const monday = new Date("2026-08-17T19:20:00Z");
   /** UTC 火曜 */
   const tuesday = new Date("2026-08-18T19:20:00Z");
 
-  it("★月曜は書き出す★", async () => {
+  it("★月曜も書き出す★", async () => {
     const { objects, binding } = fakeBucket();
     const result = await runScheduledTasks({
       cron: CRON_DAILY,
@@ -179,7 +179,8 @@ describe("日次の中で週1回だけ書き出す", () => {
     expect(result.purgeAccounts).not.toBe("failed");
   });
 
-  it("月曜以外は書き出さない（掃除だけ走る）", async () => {
+  it("★月曜以外も書き出す（DB 側に時点復旧が無いので毎日）★", async () => {
+    // 以前は週1回（月曜だけ）。Supabase Free には PITR もバックアップも無いので毎日にした。
     const { objects, binding } = fakeBucket();
     const result = await runScheduledTasks({
       cron: CRON_DAILY,
@@ -189,8 +190,8 @@ describe("日次の中で週1回だけ書き出す", () => {
       now: tuesday,
     });
 
-    expect(Object.keys(result)).not.toContain("exportDatabase");
-    expect(objects.size).toBe(0);
+    expect(result.exportDatabase).not.toBe("failed");
+    expect(objects.size).toBe(1);
     expect(result.purgeAccounts).not.toBe("failed");
   });
 

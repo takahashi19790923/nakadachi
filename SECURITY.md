@@ -75,6 +75,17 @@ nonce は React コンテキスト（`app/nonce.ts`）で運んでいます。
 | 所有者ロール | DDL 可 | マイグレーション（`pnpm run db:migrate`）だけに使う |
 | アプリ用ロール | `SELECT` / `INSERT` / `UPDATE` / `DELETE` のみ | Workers が実行時に使う |
 
+> **2026-08-18、本番は Supabase（東京）へ移りました。** ロールの分離は同じ方針で、
+> 作成は `pnpm run db:create-app-role`（`scripts/create-app-role.ts`）が行います。
+> 所有者は Supabase の `postgres`（`.env` の `DATABASE_URL_PRODUCTION`）、アプリ用は
+> `nakadachi_app_production`（DDL 無し。`.env` の `DATABASE_URL_APP_PRODUCTION`、Hyperdrive の接続先）。
+> スクリプトは作ったあとに「アプリロールで DDL が通らないこと」を実際に試して確かめます。
+> ★Supabase では PUBLIC からの CONNECT を剥がしません。★ Supabase 自身の内部ロールが
+> 同じ `postgres` データベースへ繋ぐため。このプロジェクトは nakadachi の本番専用なので、
+> 越境の相手が居ません。
+>
+> 以下は Neon（dev / preview で今も使っている）での作り方です。
+
 Neon での作り方：
 
 > **★Neon のロールはプロジェクト全体で共有されます。★ データベース単位ではありません。**
