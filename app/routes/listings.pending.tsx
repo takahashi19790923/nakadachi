@@ -25,7 +25,15 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   if (!isUlid(params.listingId)) throw notFound("malformed id");
 
   const db = context.getDb();
-  const ownership = await getListingOwnership(db, params.listingId);
+  /*
+   * ★所有者の確認と決済状況は同時に引く。★ どちらも listingId しか使わない。
+   * この画面は5秒ごとに読み直すので、直列にした1往復が支払いを待つ人に
+   * 何度も乗る。決済状況の行は、所有者でなければ捨てるだけ（返さない）。
+   */
+  const [ownership, payment] = await Promise.all([
+    getListingOwnership(db, params.listingId),
+    getPaymentStateForListing(db, params.listingId),
+  ]);
   if (!ownership) throw notFound(`listing not found: ${params.listingId}`);
   assertOwner(ownership.ownerId, user);
 
@@ -33,8 +41,6 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   if (ownership.status === "published") {
     throw redirect(`/listings/${params.listingId}?published=1`);
   }
-
-  const payment = await getPaymentStateForListing(db, params.listingId);
 
   return {
     listingId: params.listingId,

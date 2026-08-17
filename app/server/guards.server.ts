@@ -22,15 +22,25 @@ export interface GuardArgs {
 /**
  * 同じリクエスト内でセッションを何度も引かないための記憶。
  * 1画面で複数のローダーが動くため、素直に書くと同じ問い合わせが並ぶ。
- * キーが Request なので、リクエストが終われば参照ごと消える。
+ *
+ * ★キーは AppContext（Worker が1リクエストにつき1つ作る）。★ 以前は Request を
+ * キーにしていたが、React Router はフォーム送信のあとの再読み込みで
+ * ★新しい Request オブジェクトを作る★ため、action で引いたセッションが
+ * 直後のローダーで使い回されず、★すべての POST でセッションを2回引いていた★
+ * （2026-08-17 の点検で発覚。約20の送信経路すべてに1往復ずつ乗っていた）。
+ * AppContext は action と再読み込みのローダーに同じものが渡る。
+ *
+ * ★前提: 自分のセッションを失効・入れ替える action は redirect で終える。★
+ * データを返して再読み込みさせると、ローダーが古い利用者を見る。
+ * logout / login.verify / login.link はいずれも redirect で終えている。
  */
-const userByRequest = new WeakMap<Request, Promise<SessionUser | null>>();
+const userByContext = new WeakMap<AppContext, Promise<SessionUser | null>>();
 
 export function loadUser({
   request,
   context,
 }: GuardArgs): Promise<SessionUser | null> {
-  const cached = userByRequest.get(request);
+  const cached = userByContext.get(context);
   if (cached) return cached;
 
   // getDb は「関数のまま」渡す。Cookie が無ければ DB 接続は作られない。
@@ -39,7 +49,7 @@ export function loadUser({
     env: context.env,
     request,
   });
-  userByRequest.set(request, promise);
+  userByContext.set(context, promise);
   return promise;
 }
 

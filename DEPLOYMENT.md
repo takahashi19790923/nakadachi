@@ -47,6 +47,36 @@ pnpm run secrets:put -- --env production
 **Secret は「次のデプロイから」しか反映されません。** 投入したら必ず
 デプロイし直してください。
 
+### Hyperdrive（DB への接続の使い回し）
+
+アプリは **Cloudflare Hyperdrive 経由**で Neon へ繋ぎます（2026-08-18〜）。
+Hyperdrive は DB の近くの Cloudflare 拠点で接続を張りっぱなしにして使い回すので、
+リクエストごとに TCP/TLS を張り直しません。
+
+```bash
+# Neon の「接続プール無し」のホスト（-pooler を外したもの）＋アプリ用ロールで作る
+pnpm exec wrangler hyperdrive create nakadachi-preview    --connection-string="postgresql://…"
+pnpm exec wrangler hyperdrive create nakadachi-production --connection-string="postgresql://…"
+# ★キャッシュは切る★（投稿した直後の一覧に最大60秒古い結果が出るのを避ける）
+pnpm exec wrangler hyperdrive update <id> --caching-disabled=true
+```
+
+出力された ID を `wrangler.jsonc` の各 env の `hyperdrive[].id` に書きます。
+
+**なぜ入れたか。** 2026-08-17 22:50 JST 頃から、Cloudflare（NRT）→ Neon
+（ap-southeast-1）への直接接続が 2〜40秒に振れる時間帯が2時間以上続き、
+`/api/health` が 100% タイムアウトするところまで悪化しました。手元の PC や
+Vercel からは 70〜250ms で返り、HTTP でも WebSocket でも同じだったので、
+Neon 本体ではなく経路の問題です。Hyperdrive に切り替えた直後から
+**一覧 0.22〜0.70秒、`/api/health` 120〜150ms**（15回・10回連続）に戻りました。
+平常時の 162〜331ms よりも速くなっています。
+
+**切り戻し。** `wrangler.jsonc` から `hyperdrive` の項目を消してデプロイすれば、
+`DATABASE_URL`（Neon serverless ドライバで直接）に戻ります
+（`app/server/db.server.ts` が binding の有無で分岐）。`wrangler rollback` でも戻ります。
+
+**ローカルとテストには binding が無い**ので、従来どおり直接繋ぎます。
+
 ---
 
 ## 3. 毎回の手順

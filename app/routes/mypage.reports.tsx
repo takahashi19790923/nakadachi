@@ -1,7 +1,7 @@
 import { EmptyState } from "~/components/ui";
 import { formatDateTimeJa } from "~/domain/listing-view";
 import { privatePageMeta } from "~/domain/seo";
-import { REPORT_REASON_LABEL } from "~/domain/validation/interaction";
+import { REPORT_REASON_LABEL } from "~/domain/report-reasons";
 import { requireUser } from "~/server/guards.server";
 import { listReportsByReporter } from "~/server/repositories/moderation-repository.server";
 import type { Route } from "./+types/mypage.reports";

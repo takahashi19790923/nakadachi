@@ -106,6 +106,28 @@
 			"triggers": {
 				"crons": ["0 * * * *", "20 19 * * *"]
 			},
+			/*
+			 * ★Hyperdrive 経由で Neon へ繋ぐ。★
+			 *
+			 * 2026-08-17 22:50 JST 頃から、Cloudflare（NRT）→ Neon（ap-southeast-1）
+			 * の問い合わせが 2〜40秒に振れる時間帯が2時間以上続いた。手元の PC や
+			 * Vercel からは 70〜250ms で返り、HTTP でも WebSocket でも同じだったので
+			 * Neon 本体ではなく Cloudflare の出口と AWS シンガポールの間の経路。
+			 * Hyperdrive は DB の近くの Cloudflare 拠点から接続を張りっぱなしにして
+			 * 使い回すので、リクエストごとに新しい接続を張らずに済む。
+			 * 平常時も接続の確立ぶんが減る。
+			 *
+			 * ID は `wrangler hyperdrive create nakadachi-preview` の出力。
+			 * 接続文字列は Neon の「接続プール無し」のホスト（-pooler を外したもの）。
+			 * binding が無い環境（ローカル・テスト）は従来どおり Neon の
+			 * serverless ドライバで直接繋ぐ（app/server/db.server.ts）。
+			 */
+			"hyperdrive": [
+				{
+					"binding": "HYPERDRIVE",
+					"id": "05f672e8d21847eeaa0057af574d96be"
+				}
+			],
 			// ★workers.dev を明示的に閉じる。★
 			// 開いていると同じ内容が *.workers.dev でも見え、こちらは
 			// TURNSTILE_EXPECTED_HOSTS に一致しないので認証だけが壊れる。
@@ -149,6 +171,15 @@
 			"triggers": {
 				"crons": ["0 * * * *", "20 19 * * *"]
 			},
+			// preview と同じ（説明はそちら）。ID は `wrangler hyperdrive create nakadachi-production`。
+			// ★キャッシュは切ってある（wrangler hyperdrive update --caching-disabled）。★
+			// 投稿した直後の一覧に最大60秒古い結果が出るのを避けるため。接続の使い回しだけを使う。
+			"hyperdrive": [
+				{
+					"binding": "HYPERDRIVE",
+					"id": "bc7ebd4ecfdc4b70a4860fb2338418e2"
+				}
+			],
 			// preview と同じ理由で明示的に閉じる。
 			"workers_dev": false
 		}

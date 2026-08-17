@@ -9,9 +9,15 @@ import type { ListingSummary } from "~/domain/listing-types";
 
 interface Props {
   listing: ListingSummary;
+  /**
+   * 画面の上のほうに出るカード（一覧の先頭2〜3枚）は true。
+   * 全部 lazy にすると、最初に見える写真まで後回しになり、
+   * 表示が整うまでの時間（LCP）が伸びる。詳細ページの1枚目と同じ扱い。
+   */
+  priority?: boolean;
 }
 
-export function ListingCard({ listing }: Props) {
+export function ListingCard({ listing, priority = false }: Props) {
   const price = formatListingPrice({
     categorySlug: listing.categorySlug,
     priceType: listing.priceType,
@@ -23,7 +29,8 @@ export function ListingCard({ listing }: Props) {
 
   return (
     <article className="card h-full overflow-hidden transition-colors hover:border-ai-300">
-      <Link to={`/listings/${listing.id}`} className="block">
+      {/* prefetch="intent": 触れた時点で詳細のデータを先読みし、押してから DB を待たない */}
+      <Link to={`/listings/${listing.id}`} className="block" prefetch="intent">
         <div className="aspect-[4/3] w-full bg-washi-100">
           {listing.imageKey ? (
             <img
@@ -32,7 +39,8 @@ export function ListingCard({ listing }: Props) {
               alt=""
               width={400}
               height={300}
-              loading="lazy"
+              loading={priority ? "eager" : "lazy"}
+              fetchPriority={priority ? "high" : "auto"}
               decoding="async"
               className="h-full w-full object-cover"
             />

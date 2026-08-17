@@ -87,9 +87,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           </p>
         ) : (
           <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {recent.map((listing) => (
+            {recent.map((listing, index) => (
               <li key={listing.id}>
-                <ListingCard listing={listing} />
+                <ListingCard listing={listing} priority={index < 3} />
               </li>
             ))}
           </ul>

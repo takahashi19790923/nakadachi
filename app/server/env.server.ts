@@ -20,6 +20,12 @@ export interface AppEnv {
    * テストや定期処理以外の場所から触らないこと。
    */
   BACKUPS?: R2Bucket;
+  /**
+   * Cloudflare Hyperdrive（DB の近くで接続を張りっぱなしにして使い回す）。
+   * ★あれば DB はこちら経由で繋ぐ。無ければ DATABASE_URL で直接繋ぐ。★
+   * ローカルとテストには無い。理由は wrangler.jsonc の hyperdrive の説明。
+   */
+  HYPERDRIVE?: Hyperdrive;
 
   // ── 公開してよい設定（wrangler.jsonc の vars）────────────────
   ENVIRONMENT: "development" | "preview" | "production";

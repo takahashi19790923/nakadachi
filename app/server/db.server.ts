@@ -1,7 +1,9 @@
-import { neonConfig, Pool } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-serverless";
+import { neonConfig, Pool as NeonPool } from "@neondatabase/serverless";
+import { drizzle as drizzleNeon } from "drizzle-orm/neon-serverless";
+import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
+import pg from "pg";
 
-import type { Db } from "~/db/db-type.ts";
+import { asDb, type Db } from "~/db/db-type.ts";
 import * as schema from "~/db/schema/index.ts";
 import { requireSecret, type AppEnv } from "./env.server.ts";
 
@@ -37,15 +39,38 @@ export function createRequestDb(env: AppEnv): {
   getDb: () => Db;
   dispose: () => Promise<void>;
 } {
-  let pool: Pool | null = null;
+  let pool: NeonPool | pg.Pool | null = null;
   let db: Db | null = null;
 
   return {
     getDb() {
       if (db) return db;
+      if (env.HYPERDRIVE) {
+        /*
+         * ★Hyperdrive 経由。★ Cloudflare が DB の近くで接続を張りっぱなしにして
+         * 使い回すので、リクエストごとに新しい TCP/TLS を張らない。
+         * ドライバは node-postgres（Cloudflare の案内どおり。nodejs_compat が要る）。
+         * Pool 自体はリクエストごとに作る（Workers の I/O 共有禁止は変わらない）。
+         * max: 1 — 1リクエストの中は直列で足りる。増やしても Hyperdrive 側の
+         * 接続を食うだけ。
+         *
+         * 経緯: 2026-08-17 夜、Cloudflare（NRT）→ Neon（シンガポール）への
+         * 直接接続が 2〜40秒に振れる時間帯が2時間以上続いた。HTTP でも
+         * WebSocket でも同じで、手元や Vercel からは正常。経路の問題は
+         * アプリからは直せないので、接続の張り方そのものを変えた。
+         */
+        const pgPool = new pg.Pool({
+          connectionString: env.HYPERDRIVE.connectionString,
+          max: 1,
+        });
+        pool = pgPool;
+        db = asDb(drizzlePg(pgPool, { schema, casing: "snake_case" }));
+        return db;
+      }
       const connectionString = requireSecret(env, "DATABASE_URL");
-      pool = new Pool({ connectionString });
-      db = drizzle(pool, { schema, casing: "snake_case" });
+      const neonPool = new NeonPool({ connectionString });
+      pool = neonPool;
+      db = drizzleNeon(neonPool, { schema, casing: "snake_case" });
       return db;
     },
     async dispose() {

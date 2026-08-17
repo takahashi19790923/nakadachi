@@ -83,6 +83,23 @@ export function applySecurityHeaders(
     headers.set("X-Robots-Tag", "noindex, nofollow");
   }
 
+  /*
+   * ★HTML には必ず Cache-Control を付ける。★ 無いと共有キャッシュ
+   * （会社や ISP の中継）が RFC 9111 の発見的な期限で保存してよいことになり、
+   * ★別の人のマイページやメッセージが次の人に見える★余地ができる。
+   * 2026-08-17 の点検まで、55 ある画面のどれも付けていなかった。
+   *
+   * 公開ページも private にする。同じ HTML でも CSP の nonce と CSRF の
+   * トークンが1回ごとに違い、Set-Cookie も付く。共有キャッシュから配られた
+   * 瞬間に「画面は出るがボタンが効かない」「最初の送信が CSRF で落ちる」になる。
+   * ブラウザ自身の戻る／進むは no-store でも近年は動く（bfcache）。
+   * 自分で Cache-Control を決めた応答（/media, sitemap, robots, API）は触らない。
+   */
+  const contentType = headers.get("content-type") ?? "";
+  if (!headers.has("cache-control") && contentType.includes("text/html")) {
+    headers.set("Cache-Control", "private, no-store");
+  }
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

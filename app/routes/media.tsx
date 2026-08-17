@@ -21,11 +21,16 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     throw notFound("malformed object key");
   }
 
-  const viewer = await loadUser({ request, context: context });
+  // 閲覧者は Promise のまま渡す。公開中の写真なら待たずに返り、
+  // 下書きの写真のときだけ中で待つ（行の問い合わせと並走する）。
   const access = await resolveMediaAccess({
     db: context.getDb(),
     objectKey,
-    viewer: viewer ? { id: viewer.id, role: viewer.role } : null,
+    viewer: loadUser({ request, context })
+      .then((viewer) => (viewer ? { id: viewer.id, role: viewer.role } : null))
+      // 公開中の写真では待たれずに捨てられる。DB が落ちていても未処理の
+      // 拒否を残さない。下書きの写真なら「未ログイン」として 404（fail-close）。
+      .catch(() => null),
   });
 
   const object = await context.env.MEDIA.get(access.objectKey);
