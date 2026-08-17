@@ -489,3 +489,4 @@ pnpm run deploy:production   # 本番
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 環境の分離、デプロイ手順、切り戻し |
 | [OPERATIONS.md](OPERATIONS.md) | 定期処理、監視、バックアップ／復旧、よくある障害 |
 | [docs/ROUTES.md](docs/ROUTES.md) | ルート一覧と、それぞれの権限・索引の扱い |
+| [docs/night-audit-2026-08-17.md](docs/night-audit-2026-08-17.md) | 2026-08-17 夜の総点検の記録。直したもの・Hyperdrive への切り替え・まだ直していないもの |
