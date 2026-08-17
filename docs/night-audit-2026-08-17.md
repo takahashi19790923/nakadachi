@@ -112,12 +112,13 @@ Hyperdrive を通した実書き込みは preview で確かめた: 詳細ペー�
 | JavaScript 無効だと決済へ進めない | Turnstile も JS 前提なので、実質は影響なし | noscript の案内だけ出すか |
 | 公開ページのエッジキャッシュ | nonce と CSRF が1回ごとに違うので、そのままでは載せられない | hash ベースの CSP に変える設計が要る。Hyperdrive で往復が減ったので優先度は下がった |
 | Stripe の代表者メールを `h.takahashi0923@gmail.com` へ戻す・本番のテスト投稿2件の後始末 | 前回からの持ち越し | 手作業（Stripe ダッシュボード／管理画面） |
-| `rewrite-uptime` の KV に heartbeat が無かった（`wrangler kv key list` が空） | 監視の見張り役が読む心拍。CLI の見方の問題か、本当に無いか未確認 | 別リポジトリ。確認だけ |
 | dependabot の PR #16〜#18 | codeql-action と patch/minor の更新 | CI が通れば取り込んでよい |
 
 ## 8. 確認したこと（数字）
 
 - 本番（Hyperdrive・温め済み）: `/` 0.21〜0.44s、`/c/sell-buy` 0.22〜0.39s、`/area/13/13113` 0.24〜0.71s、`/search` 0.22〜0.33s、詳細 0.23〜0.37s（各5回）
 - 本番 `/api/health`: 120〜150ms（10回連続）、cold start 742ms
-- E2E: 68件を2回連続で緑（PR ごと）。CI: 3本とも7チェック緑（GitHub 側の 429/503 で2回再実行した）
+- pg Pool の max を 1 → 5 に（PR #24）: preview と本番を同時刻に8回ずつ比べ、`/c/sell-buy` の中央値 0.24秒 → 0.17秒（Promise.all が本当に並ぶようになった）
+- 監視（rewrite-uptime）は動いている（Neon の last_active が :00/:15/:30/:45 に更新される）。`wrangler kv key list` が空に見えたのは `--remote` を付けずローカルを見ていただけ
+- E2E: 68件を2回連続で緑（PR ごと）。CI: 4本とも7チェック緑（GitHub 側の 429/503 で3回再実行した）
 - マイグレーション 0003 は dev / preview / production に適用済み（Neon の API でスキーマを照合）
