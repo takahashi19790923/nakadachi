@@ -59,7 +59,8 @@ export function applySecurityHeaders(
   headers.set(
     "Permissions-Policy",
     // 実際に使わない機能はすべて空にする。
-    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=(), interest-cohort=()",
+    // interest-cohort（FLoC）は廃止済みで無視される。後継の browsing-topics を閉じる。
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=(), browsing-topics=(), display-capture=(), fullscreen=(self)",
   );
   headers.set("Cross-Origin-Opener-Policy", "same-origin");
   headers.set("Cross-Origin-Resource-Policy", "same-origin");

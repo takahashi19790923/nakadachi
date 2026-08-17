@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 
 import { CSRF_TOKEN_FIELD } from "~/domain/form-fields";
 
@@ -183,6 +183,13 @@ export function SelectField({
         defaultValue={defaultValue ?? ""}
         className="field-input"
         aria-invalid={error ? true : undefined}
+        // TextField と同じ結び付け。無いと補足とエラーの文が読み上げに乗らない
+        // （id は FieldWrapper が出しているのに、どこからも参照されていなかった）。
+        aria-describedby={
+          [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
       >
         {placeholder ? <option value="">{placeholder}</option> : null}
         {options.map((option) => (
@@ -206,7 +213,14 @@ export function RadioGroupField({
 }: BaseProps & { options: readonly Option[] }) {
   const groupId = useId();
   return (
-    <fieldset className="mt-4">
+    <fieldset
+      className="mt-4"
+      aria-describedby={
+        [hint ? `${groupId}-hint` : null, error ? `${groupId}-error` : null]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
+    >
       <legend className="field-label">
         {label}
         {required ? (
@@ -240,9 +254,13 @@ export function RadioGroupField({
           );
         })}
       </div>
-      {hint ? <p className="field-hint">{hint}</p> : null}
+      {hint ? (
+        <p id={`${groupId}-hint`} className="field-hint">
+          {hint}
+        </p>
+      ) : null}
       {error ? (
-        <p className="field-error" role="alert">
+        <p id={`${groupId}-error`} className="field-error" role="alert">
           {error}
         </p>
       ) : null}
@@ -299,10 +317,24 @@ export function ErrorSummary({
   fields?: Record<string, string> | null;
 }) {
   const entries = Object.entries(fields ?? {});
-  if (!message && entries.length === 0) return null;
+  const ref = useRef<HTMLDivElement>(null);
+  const hasContent = Boolean(message) || entries.length > 0;
+
+  /*
+   * ★出た瞬間にフォーカスを移す。★ 長いフォームで送信して失敗すると、
+   * エラーの要約は上に出るのにフォーカスは下の送信ボタンに残る。キーボードの
+   * 人は Shift+Tab で全項目をさかのぼらないと何が起きたか分からない。
+   * tabIndex={-1} は前からあったが、focus() する場所が無く効いていなかった。
+   */
+  useEffect(() => {
+    if (hasContent) ref.current?.focus();
+  }, [hasContent, message, entries.length]);
+
+  if (!hasContent) return null;
 
   return (
     <div
+      ref={ref}
       role="alert"
       tabIndex={-1}
       className="mt-4 rounded-lg border border-red-300 bg-red-50 p-4"

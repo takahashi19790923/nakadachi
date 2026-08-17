@@ -412,7 +412,8 @@ function AreaSelect({
         defaultValue={defaultValue}
         className="field-input"
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? "listing-area-error" : "listing-area-hint"}
+        // 補足（公開されるのは市区町村まで）はエラー時にも読ませる。片方だけにしない。
+        aria-describedby={error ? "listing-area-hint listing-area-error" : "listing-area-hint"}
       >
         <option value="">選択してください</option>
         {prefectures.map((prefecture) => {
