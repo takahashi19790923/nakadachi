@@ -4,6 +4,7 @@ import { z } from "zod";
 import "./zod-setup";
 
 import { CATEGORY_SLUGS, LISTING_KINDS } from "../categories";
+import { REPORT_REASONS } from "../report-reasons";
 import { emailSchema, trimmedString, ulidSchema } from "./common";
 
 /** サイト内メッセージ。HTML は保存も描画もしない */
@@ -16,27 +17,10 @@ export const messageSchema = z.object({
   ),
 });
 
-export const REPORT_REASONS = [
-  "prohibited_item",
-  "spam",
-  "fraud",
-  "harassment",
-  "personal_info",
-  "illegal_job",
-  "other",
-] as const;
-
-export const REPORT_REASON_LABEL: Readonly<
-  Record<(typeof REPORT_REASONS)[number], string>
-> = {
-  prohibited_item: "禁止されている出品物・サービス",
-  spam: "宣伝・スパム・無関係な内容",
-  fraud: "詐欺・なりすましの疑い",
-  harassment: "嫌がらせ・攻撃的な言動",
-  personal_info: "他人の個人情報が含まれている",
-  illegal_job: "法令に反する労働条件・差別的な求人",
-  other: "その他",
-};
+// 表示名と値は依存を持たないファイル（../report-reasons）へ移した。
+// クライアント側の画面がここを import すると zod ごと引き込むため。
+// 既存の import 先を壊さないよう、ここからも再輸出する。
+export { REPORT_REASONS, REPORT_REASON_LABEL } from "../report-reasons";
 
 export const reportSchema = z.object({
   reason: z.enum(REPORT_REASONS),

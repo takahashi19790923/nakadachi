@@ -10,6 +10,7 @@ import {
   PRICE_TYPES,
   PRICE_UNITS,
 } from "../../domain/categories.ts";
+import { REPORT_REASONS } from "../../domain/report-reasons.ts";
 import { LISTING_STATUSES } from "../../domain/listing-status.ts";
 
 /**
@@ -85,15 +86,9 @@ export const reportTargetTypeEnum = pgEnum("report_target_type", [
   "user",
 ]);
 
-export const reportReasonEnum = pgEnum("report_reason", [
-  "prohibited_item",
-  "spam",
-  "fraud",
-  "harassment",
-  "personal_info",
-  "illegal_job",
-  "other",
-]);
+// 値は domain/report-reasons.ts から。ここだけ手書きだと、理由を足したときに
+// TS の enum と DB の enum がずれ、通報の INSERT が本番で落ちる。
+export const reportReasonEnum = pgEnum("report_reason", REPORT_REASONS);
 
 export const reportStatusEnum = pgEnum("report_status", [
   "open",

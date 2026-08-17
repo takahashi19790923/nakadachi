@@ -61,6 +61,19 @@ const summaryColumns = {
   areaNote: listings.areaNote,
   publishedAt: listings.publishedAt,
   expiresAt: listings.expiresAt,
+  /*
+   * ★一覧の写真（先頭の1枚）は同じ文の中で引く。★
+   * 以前は行を取ってから ID をまとめてもう1回問い合わせていた（N+1 ではないが、
+   * 一覧のたびに DB との往復が必ず1回増える。シンガポールまで片道 100〜250ms）。
+   * 相関サブクエリなら索引 listing_images_listing_position_idx で
+   * 1行あたり1回の索引引きで済み、往復は1回。
+   */
+  imageKey: sql<string | null>`(
+    select li.object_key from listing_images li
+    where li.listing_id = ${listings.id} and li.deleted_at is null
+    order by li.position asc
+    limit 1
+  )`.as("image_key"),
 };
 
 type SummaryRow = {
@@ -80,40 +93,15 @@ type SummaryRow = {
   areaNote: string | null;
   publishedAt: Date | null;
   expiresAt: Date | null;
+  imageKey: string | null;
 };
 
 /**
- * 一覧の写真は「投稿ごとに先頭の1枚」だけ。
- *
- * 行ごとに問い合わせると件数に比例して往復が増える（ネットワーク越しの DB
- * では 20件で 20往復＝実測で秒単位の差になる）。ID をまとめて1回で引く。
+ * 行を画面用の形（ISO 文字列の日付・型付きの列挙）に揃える。
+ * 写真は summaryColumns の相関サブクエリで一緒に来ているので、ここでは
+ * もう問い合わせない（以前はここで2回目の往復をしていた）。
  */
-async function attachFirstImages(
-  db: Db,
-  rows: SummaryRow[],
-): Promise<ListingSummary[]> {
-  if (rows.length === 0) return [];
-  const ids = rows.map((row) => row.id);
-
-  const images = await db
-    .select({
-      listingId: listingImages.listingId,
-      objectKey: listingImages.objectKey,
-      position: listingImages.position,
-    })
-    .from(listingImages)
-    .where(
-      and(inArray(listingImages.listingId, ids), isNull(listingImages.deletedAt)),
-    )
-    .orderBy(asc(listingImages.listingId), asc(listingImages.position));
-
-  const firstByListing = new Map<string, string>();
-  for (const image of images) {
-    if (!firstByListing.has(image.listingId)) {
-      firstByListing.set(image.listingId, image.objectKey);
-    }
-  }
-
+function toSummaries(rows: SummaryRow[]): ListingSummary[] {
   return rows.map((row) => ({
     ...row,
     kind: row.kind as ListingKind,
@@ -123,7 +111,7 @@ async function attachFirstImages(
     // 日付は ISO 文字列に揃える。ローダー境界での型の揺れを無くすため。
     publishedAt: row.publishedAt?.toISOString() ?? null,
     expiresAt: row.expiresAt?.toISOString() ?? null,
-    imageKey: firstByListing.get(row.id) ?? null,
+    imageKey: row.imageKey ?? null,
   }));
 }
 
@@ -180,7 +168,7 @@ export async function listRecentPublished(
     .where(publishedOnly())
     .orderBy(desc(listings.publishedAt))
     .limit(options.limit);
-  return attachFirstImages(db, rows);
+  return toSummaries(rows);
 }
 
 // ── 検索 ──────────────────────────────────────────────────────────
@@ -297,7 +285,7 @@ export async function searchListings(
 
   const total = countRows[0]?.total ?? 0;
   return {
-    items: await attachFirstImages(db, rows),
+    items: toSummaries(rows),
     total,
     page: params.page,
     perPage: params.perPage,
@@ -469,7 +457,7 @@ export async function listByOwner(
       ),
     )
     .orderBy(desc(listings.createdAt));
-  return attachFirstImages(db, rows);
+  return toSummaries(rows);
 }
 
 /**

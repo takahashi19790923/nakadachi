@@ -205,7 +205,16 @@ export interface MediaAccess {
 export async function resolveMediaAccess(options: {
   db: Db;
   objectKey: string;
-  viewer: { id: string; role: "user" | "admin" } | null;
+  /**
+   * 閲覧者。Promise で渡してよい。
+   * ★行の問い合わせと閲覧者の解決を同時に走らせるため。★ 公開中の写真なら
+   * 閲覧者は見ずに返す（await しない）。下書きの写真のときだけ待つ。
+   * 詳細ページ1枚につき写真が5枚なら、直列だと5往復ぶん余計に待たせていた。
+   */
+  viewer:
+    | { id: string; role: "user" | "admin" }
+    | null
+    | Promise<{ id: string; role: "user" | "admin" } | null>;
 }): Promise<MediaAccess> {
   const rows = await options.db
     .select({
@@ -235,7 +244,7 @@ export async function resolveMediaAccess(options: {
     };
   }
 
-  const viewer = options.viewer;
+  const viewer = await options.viewer;
   const canSee =
     viewer !== null && (viewer.role === "admin" || viewer.id === row.ownerId);
 

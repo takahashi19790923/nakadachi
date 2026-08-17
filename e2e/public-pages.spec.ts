@@ -71,6 +71,32 @@ test.describe("セキュリティヘッダー", () => {
     expect(scriptSrc).toMatch(/'nonce-[A-Za-z0-9_-]+'/);
     expect(csp).toContain("frame-ancestors 'none'");
   });
+
+  test("★HTML は共有キャッシュに保存されない★", async ({ page }) => {
+    /*
+     * 無いと会社や ISP の中継が発見的な期限で保存してよいことになり、
+     * 別の人のマイページが次の人に見える余地ができる。公開ページも
+     * nonce と CSRF トークンが1回ごとに違うので private にしてある。
+     */
+    for (const path of ["/", "/legal/terms", "/login"]) {
+      const response = await page.goto(path);
+      expect(response!.headers()["cache-control"], path).toBe("private, no-store");
+    }
+  });
+
+  test("★ハッシュ付きの静的アセットは1年 immutable★", async ({ request }) => {
+    // 付けないと 186KB の JS も CSS も画面遷移のたびに再検証の往復が入る。
+    const html = await (await request.get("/")).text();
+    const scriptSrc = html.match(/["'](\/assets\/[^"']+\.js)["']/)?.[1];
+    expect(scriptSrc, "HTML に /assets/*.js への参照があること").toBeTruthy();
+    const asset = await request.get(scriptSrc!);
+    expect(asset.status()).toBe(200);
+    expect(asset.headers()["cache-control"]).toBe(
+      "public, max-age=31536000, immutable",
+    );
+    // 静的アセットは Worker を通らないので、_headers 側で nosniff を付けている。
+    expect(asset.headers()["x-content-type-options"]).toBe("nosniff");
+  });
 });
 
 test.describe("機械向けの口", () => {

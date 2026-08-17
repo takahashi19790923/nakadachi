@@ -8,11 +8,11 @@ import {
 } from "~/components/form";
 import { privatePageMeta } from "~/domain/seo";
 import { isUlid } from "~/domain/ulid";
-import {
-  REPORT_REASONS,
-  REPORT_REASON_LABEL,
-  reportSchema,
-} from "~/domain/validation/interaction";
+// 表示名は依存を持たないファイルから。検証スキーマ（zod）は action だけが
+// 使うので別の import にしておく。1つの import にまとめると、React Router が
+// action を落としたあとも zod がクライアントへ残る。
+import { REPORT_REASONS, REPORT_REASON_LABEL } from "~/domain/report-reasons";
+import { reportSchema } from "~/domain/validation/interaction";
 import { formDataToObject, toFieldErrors } from "~/domain/validation/common";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";

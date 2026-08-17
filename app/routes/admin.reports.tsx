@@ -3,7 +3,7 @@ import { Form, Link } from "react-router";
 import { CsrfInput, ErrorSummary } from "~/components/form";
 import { formatDateTimeJa } from "~/domain/listing-view";
 import { privatePageMeta } from "~/domain/seo";
-import { REPORT_REASON_LABEL } from "~/domain/validation/interaction";
+import { REPORT_REASON_LABEL } from "~/domain/report-reasons";
 import { writeAdminAction, writeAuditLog } from "~/server/audit.server";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
