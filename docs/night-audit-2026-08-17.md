@@ -86,8 +86,12 @@ Cloudflare 拠点で接続を張りっぱなしにして使い回すので、リ
 - アイドル明けの cold start は 742ms（直接のとき 653ms）で変わらない
 - 手順・切り戻しは `DEPLOYMENT.md`「Hyperdrive」。切り戻しは `wrangler.jsonc` の `hyperdrive` を消してデプロイ、または `wrangler rollback`
 
-書き込みの経路（トランザクション含む）は、同じ `pg` + drizzle の組み合わせで統合テスト175件が通っており、
-本番の 16:00 UTC の定期処理（UPDATE を含む）のログも確認した（下記「確認したこと」）。
+書き込みの経路は、同じ `pg` + drizzle の組み合わせで統合テスト175件（トランザクション含む）が通っている。
+Hyperdrive を通した実書き込みは preview で確かめた: 詳細ページを3回開いて `view_count` が 1 → 4
+（応答後の UPDATE が Hyperdrive 経由で届いている）。本番も同じコードと自分用の Hyperdrive 設定。
+★本番の定期処理（毎時の UPDATE）は `wrangler tail` が数分で切れて捕まえられなかった。★
+次の :20 JST（19:20 UTC）の日次と合わせて、朝に Cloudflare のダッシュボード（Workers → nakadachi-production → Logs / Cron）で
+「cron finished」が出ているか一度見てほしい。
 
 ## 6. SEO・アクセシビリティ（直した）
 
