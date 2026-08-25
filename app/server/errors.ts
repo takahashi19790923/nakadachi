@@ -81,11 +81,36 @@ export class ConfigurationError extends AppError {
  * ★本文は空にする。★ detail には ID や理由が入る。Response に載せると
  * そのままブラウザへ出る。detail はログにだけ残す。
  */
+/**
+ * ログ1行に収める。
+ *
+ * ★改行と制御文字を落とす。★ detail には URL のパスがそのまま入ることが
+ * あり（`unknown category: ${slug}` など）、React Router はパスを
+ * percent-decode するので、`%0A` は本物の改行になる。そのまま出すと
+ * 攻撃者は★ログに好きな行を1行足せる★。このアプリのログは1行1レコードなので、
+ * 「cron finished purgeAccounts=5」のような、実際には起きていない記録を
+ * 後から作れてしまう。運用者はその行を見て「削除は走った」と判断する。
+ *
+ * 長さも切る。ログの容量を1リクエストで押し流されないようにする。
+ */
+function sanitizeForLog(value: string): string {
+  let out = "";
+  for (const ch of value.slice(0, 300)) {
+    const code = ch.codePointAt(0) ?? 0;
+    // 制御文字（改行・復帰・タブ・DEL を含む）は空白1つに潰す。
+    out += code < 0x20 || code === 0x7f ? " " : ch;
+  }
+  return out;
+}
+
 function httpError(code: ErrorCode, detail: string | undefined): Response {
   if (detail) {
     // ここには per-request の logger が無い（純粋関数として呼ばれるため）。
     // 直前後に出る「GET /path 404」の行と並ぶので、突き合わせはできる。
-    console.warn(`[${code}] ${detail}`);
+    // JSON で出して、他のログ行と同じ形にそろえる。
+    console.warn(
+      JSON.stringify({ level: "warn", code, detail: sanitizeForLog(detail) }),
+    );
   }
   return new Response(null, { status: STATUS_BY_CODE[code] });
 }

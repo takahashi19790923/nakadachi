@@ -109,15 +109,37 @@ describe("所有者の確認", () => {
     ).not.toThrow();
   });
 
-  it("管理者は通る", () => {
-    expect(() =>
+  /*
+   * ★管理者も «所有者» としては通さない。★
+   *
+   * この検査は 2026-08-25 の公開前監査で**期待する側を逆にした**。
+   * それまでは「管理者は通る」ことを確かめていて、実装にも
+   * `if (user.role === "admin") return;` があった。
+   *
+   * assertOwner の呼び出し元はすべて /listings/* の利用者向け画面で、
+   * 第1層（メールログイン）しか通っていない。つまり★管理者のメールボックスを
+   * 取れば、第2層（管理者の再認証）も第3層（共通の資格情報）も通らずに、
+   * 他人の下書き・写真を読み、他人の掲載を書き換え・終了できた。★
+   * しかも admin_actions に何も残らないので、後から誰が触ったか分からない。
+   *
+   * 管理者が他人のものに触る経路は /admin/* に寄せてある。あちらは
+   * 3層すべてを通り、理由の入力を必須にして writeAdminAction で記録する。
+   */
+  it("★管理者でも、他人の «所有者» としては通さない★", () => {
+    let thrown: unknown;
+    try {
       assertOwner(owner.id, {
         id: admin.id,
         role: "admin",
         status: "active",
         sessionId: "x",
-      }),
-    ).not.toThrow();
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
   });
 });
 

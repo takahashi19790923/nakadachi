@@ -64,10 +64,34 @@ async function main(): Promise<void> {
     await owner.query(
       `alter default privileges in schema public grant usage, select on sequences to ${ROLE}`,
     );
+    /*
+     * ★監査の記録は、書き足せるが消せない。★
+     *
+     * audit_logs と admin_actions は、事故のあとで「誰が何をしたか」を
+     * 確かめるためのもの。アプリからこれを消せる状態だと、
+     * アプリを乗っ取った相手が★自分の足跡だけを消せる★。
+     * コード側は insert しかしていない（2026-08-25 に全参照を確認）ので、
+     * 削除と更新を取り上げても機能は壊れない。
+     *
+     * ★保持期間の掃除をここへ足すときは、専用の役割か関数を作ること。★
+     * この revoke を戻すのではなく。
+     */
+    for (const table of ["audit_logs", "admin_actions"]) {
+      await owner.query(`revoke delete, update, truncate on ${table} from ${ROLE}`);
+    }
+
     // pg_trgm は extensions スキーマに入ることがある。索引の演算子クラスは検索パスに
     // 関係なく効くが、関数を直接呼ぶ日に備えて USAGE だけ与えておく。
     await owner.query(`grant usage on schema extensions to ${ROLE}`).catch(() => undefined);
-    console.log("権限を付けました（SELECT / INSERT / UPDATE / DELETE、DDL 無し）。");
+    /*
+     * ★RLS を素通りさせる。★ harden-db.ts が public の全テーブルで RLS を
+     * 有効にしている（Data API の役割を締め出すため。ポリシーは1つも置かない）。
+     * この属性が無いと、このロールはどの表も読めず★サイトが全面停止する。★
+     * ロールを作り直したときに落ちないよう、ここでも必ず付ける。
+     * アプリの認可は guards.server.ts が担当する（SQL 側には書かない）。
+     */
+    await owner.query(`alter role ${ROLE} bypassrls`);
+    console.log("権限を付けました（SELECT / INSERT / UPDATE / DELETE、DDL 無し、RLS 素通り）。");
   } finally {
     await owner.end();
   }

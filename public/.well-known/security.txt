@@ -1,0 +1,14 @@
+Contact: mailto:support@rewrite-co.com
+Expires: 2027-08-25T00:00:00.000Z
+Preferred-Languages: ja, en
+Canonical: https://nakadachi.rewrite-co.com/.well-known/security.txt
+Policy: https://nakadachi.rewrite-co.com/legal/terms
+
+# 脆弱性を見つけた方へ
+#
+# 公開の場に書く前に、上のアドレスへご連絡ください。
+# 修正までの間、実在の利用者のデータには触れないでください。
+#
+# Expires は RFC 9116 で必須です。★期限が切れると、この宣言は無効として
+# 扱われます。★ 2027-08-25 より前に更新してください（DEPLOYMENT.md の
+# 「定期的に見直すもの」に項目があります）。

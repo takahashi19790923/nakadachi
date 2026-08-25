@@ -101,6 +101,19 @@ export async function requireAdminGate(args: GuardArgs): Promise<SessionUser> {
  * ★見つからない扱いにするか、権限エラーにするかを意図して選ぶ。★
  * 他人の下書き・他人の会話は 404。存在の有無まで隠す。
  * 「自分のものだが操作が許されない」（停止中のアカウントなど）は 403。
+ *
+ * ★管理者を「所有者」として通さない。★
+ *
+ * 以前はここに `if (user.role === "admin") return;` があった。呼び出し元は
+ * すべて /listings/* の利用者向け画面で、第1層（メールログイン）しか通って
+ * いない。つまり ★管理者のメールボックスさえ取れば、第2層（管理者用の
+ * 再認証）も第3層（共通の資格情報）も通らずに、他人の下書き・写真を読み、
+ * 他人の掲載を書き換え・終了できた。★ しかも admin_actions に何も残らない
+ * ので、あとから誰が触ったか分からない（2026-08-19 の公開前監査で発覚）。
+ *
+ * 管理者が他人のものを触る経路は /admin/* に集約してある。あちらは
+ * requireAdminGate（3層すべて）を通り、理由の入力を必須にして
+ * writeAdminAction で記録する。管理操作をそちらへ寄せることが目的。
  */
 export function assertOwner(
   ownerId: string,
@@ -108,7 +121,6 @@ export function assertOwner(
   options: { reveal?: boolean } = {},
 ): void {
   if (ownerId === user.id) return;
-  if (user.role === "admin") return;
   throw options.reveal
     ? forbidden(`not owner: ${ownerId}`)
     : notFound(`not owner: ${ownerId}`);

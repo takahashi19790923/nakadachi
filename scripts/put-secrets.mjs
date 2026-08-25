@@ -27,9 +27,19 @@ import { createInterface } from "node:readline/promises";
 const SECRETS = [
   {
     name: "DATABASE_URL",
-    hint: "Neon の pooled 接続文字列（-pooler 付き）",
-    pattern: /^postgres(ql)?:\/\/\S+@\S+-pooler\.\S+\/\S+/,
-    shape: "postgresql://ユーザー:パスワード@...-pooler.../データベース名",
+    /*
+     * ★-pooler を必須にしない。★ 本番は Supabase の Direct connection
+     * （db.<ref>.supabase.co:5432、プーラーではない）で、Hyperdrive が
+     * 接続を束ねる。以前のパターンは -pooler を要求していたので、
+     * ★正しい本番の接続文字列を拒否した★（2026-08-25 の公開前監査で発覚）。
+     * 障害の最中にこれに当たると、原因の分からない足止めになる。
+     *
+     * なお本番は通常 DATABASE_URL を持たない（Hyperdrive の binding を使う）。
+     * ここへ入れるのは、退避路として直接繋ぐときだけ。
+     */
+    hint: "接続文字列（Supabase は Direct、Neon は pooled）",
+    pattern: /^postgres(ql)?:\/\/\S+:\S+@\S+\/\S+/,
+    shape: "postgresql://ユーザー:パスワード@ホスト:5432/データベース名",
   },
   {
     name: "SESSION_SECRET",

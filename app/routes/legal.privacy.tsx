@@ -20,9 +20,44 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
   });
 }
 
+/**
+ * 委託先の一覧。
+ *
+ * ★ここは実態と必ず一致させる。★ 2026-08-18 に本番のデータベースを
+ * Neon（シンガポール）から Supabase（東京）へ移したとき、この一覧の更新が
+ * 漏れ、★実際にデータを預けている事業者が書かれていない★状態が
+ * できていた（2026-08-25 の公開前監査で発覚）。委託先を変えるときは、
+ * 同じコミットでここも直す。DEPLOYMENT.md の変更手順にも項目がある。
+ *
+ * 実際に接続している先とのずれは test/privacy-processors.test.ts で
+ * 突き合わせている。
+ */
+const PROCESSORS = [
+  {
+    name: "Cloudflare, Inc.",
+    data: "アプリケーションの実行、写真の保存、データベースの写しの保管、ボットの判定",
+    location: "日本（東京）ほか、世界各地の拠点",
+  },
+  {
+    name: "Supabase, Inc.",
+    data: "データベース（アカウント、投稿、メッセージ、決済の記録、発信者情報）",
+    location: "日本（東京）",
+  },
+  {
+    name: "Stripe, Inc.",
+    data: "決済処理（お支払いの情報、メールアドレス）",
+    location: "アメリカ合衆国",
+  },
+  {
+    name: "Resend (Plus Five Five, Inc.)",
+    data: "メール送信（宛先のメールアドレス、本文）",
+    location: "アメリカ合衆国",
+  },
+] as const;
+
 export default function Privacy() {
   return (
-    <LegalPage title="プライバシーポリシー" lastUpdated="2026年8月13日">
+    <LegalPage title="プライバシーポリシー" lastUpdated="2026年8月25日">
       <h2>1. 取得する情報</h2>
       <ul>
         <li>
@@ -107,20 +142,95 @@ export default function Privacy() {
         </li>
       </ul>
 
-      <h3>業務委託先</h3>
+      <h3>業務委託先と、国外への移転</h3>
       <p>
         サービスの提供のため、次の事業者を利用しています。
         いずれも、業務の遂行に必要な範囲でのみ情報を取り扱います。
       </p>
-      <ul>
-        <li>Cloudflare, Inc.（アプリケーションの実行、写真の保存）</li>
-        <li>Neon Inc.（データベース）</li>
-        <li>Stripe, Inc.（決済処理）</li>
-        <li>Resend（メール送信）</li>
-      </ul>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[36rem] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-washi-300 text-left">
+              <th className="py-2 pr-4 font-medium">事業者</th>
+              <th className="py-2 pr-4 font-medium">取り扱う情報</th>
+              <th className="py-2 pr-4 font-medium">データの所在</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PROCESSORS.map((row) => (
+              <tr key={row.name} className="border-b border-washi-200 align-top">
+                <td className="py-2 pr-4">{row.name}</td>
+                <td className="py-2 pr-4">{row.data}</td>
+                <td className="py-2 pr-4">{row.location}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p>
-        これらの事業者のうち、一部は日本国外にサーバーを置いています。
-        利用者情報は、当該国の法制度のもとで取り扱われることがあります。
+        このうち <strong>Stripe, Inc. および Resend</strong> は、
+        情報を<strong>アメリカ合衆国</strong>で取り扱います。
+        Cloudflare, Inc. と Supabase, Inc. はアメリカ合衆国の法人ですが、
+        本サービスの情報は上の表に記した地域に保存しています。
+      </p>
+      <p>
+        アメリカ合衆国には、日本の個人情報保護法に相当する包括的な法律は
+        ありません。分野ごとの法律と、州ごとの法律によって規律されています。
+        また、いずれの国においても、その国の法令に基づく政府機関からの
+        開示要求の対象となることがあります。
+        各事業者とは、個人情報の取扱いについて契約を結んでいます。
+      </p>
+
+      <h3>お客様の端末から外部へ送信される情報</h3>
+      <p>
+        本サービスの一部の画面では、お客様のブラウザから次の事業者へ
+        直接情報が送信されます（電気通信事業法第27条の12に基づく公表）。
+      </p>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[36rem] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-washi-300 text-left">
+              <th className="py-2 pr-4 font-medium">送信先</th>
+              <th className="py-2 pr-4 font-medium">送信される情報</th>
+              <th className="py-2 pr-4 font-medium">利用目的</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b border-washi-200 align-top">
+              <td className="py-2 pr-4">
+                Cloudflare, Inc.
+                <span className="mt-1 block text-washi-600">
+                  （Turnstile。ログイン、投稿、問い合わせ等のフォームで
+                  読み込まれます）
+                </span>
+              </td>
+              <td className="py-2 pr-4">
+                ブラウザおよび端末の情報、画面上の操作の特徴、
+                接続元IPアドレス、Cloudflare が発行する Cookie
+              </td>
+              <td className="py-2 pr-4">
+                自動化された不正な操作（ボット）の判定。
+                広告や行動の分析には利用されません。
+              </td>
+            </tr>
+            <tr className="border-b border-washi-200 align-top">
+              <td className="py-2 pr-4">
+                Stripe, Inc.
+                <span className="mt-1 block text-washi-600">
+                  （お支払いに進んだときのみ。Stripe の画面へ移動します）
+                </span>
+              </td>
+              <td className="py-2 pr-4">
+                お支払い手続きの際にお客様が入力する情報、
+                接続元IPアドレス、ブラウザの情報
+              </td>
+              <td className="py-2 pr-4">決済の処理および不正利用の防止</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        本サービスは、<strong>広告配信および行動分析のための送信は行っていません。</strong>
       </p>
 
       <h2>5. Cookie の利用</h2>
@@ -128,6 +238,11 @@ export default function Privacy() {
         ログイン状態の維持、および不正な要求の検出（CSRF対策）のために
         Cookie を使用します。<strong>広告目的の Cookie は使用していません。</strong>
         アクセス解析ツールも導入していません。
+      </p>
+      <p>
+        このほか、ボットの判定のために Cloudflare Turnstile が
+        Cookie を発行することがあります。詳しくは
+        「お客様の端末から外部へ送信される情報」をご覧ください。
       </p>
       <p>
         Cookie の詳細な取扱いは
@@ -171,6 +286,16 @@ export default function Privacy() {
         </li>
         <li>
           期限切れの認証トークン、セッションは、定期的に削除します。
+        </li>
+        <li>
+          <strong>
+            障害に備えて、データベース全体の写しを毎日取得し、
+            14日分を保管しています。
+          </strong>
+          上のとおり削除した情報も、この写しの中には
+          <strong>最長14日間</strong>残り、その後は写しごと自動的に消えます。
+          写しは暗号化された保管領域に置き、障害からの復旧以外の目的では
+          参照しません。
         </li>
       </ul>
 

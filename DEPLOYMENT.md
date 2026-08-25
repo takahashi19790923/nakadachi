@@ -228,9 +228,23 @@ GitHub Actions には**本番の Secret を持たせていません**。
 
 1. Cloudflare のダッシュボード → Workers → 該当プロジェクト → Settings → Builds
 2. GitHub リポジトリを接続する
-3. ビルドコマンド: `pnpm run build:production`
+3. ビルドコマンド: `pnpm run build:production && pnpm run check:build-secrets`
 4. デプロイコマンド: `pnpm exec wrangler deploy`
 5. ブランチ: `main`
+
+> **★`check:build-secrets` を必ず繋げること。★**
+> 手元の `pnpm run deploy:production` はこれを通しますが、Cloudflare 側の
+> ビルドは `build:production` だけを実行するので、以前はこの検査を
+> **飛ばしていました**（2026-08-25 の公開前監査で発覚）。
+> `*.server.ts` を誤ってコンポーネントから import すると、束ねる過程で
+> 秘密がクライアント側のチャンクへ紛れ込みます。`/assets/*` は
+> `max-age=31536000, immutable` で配られるので、気づいたときには手遅れです。
+
+> **★`main` への push は Actions の結果を待ちません。★**
+> Workers Builds は GitHub Actions のチェック状態を見ないので、lint も型も
+> テストも落ちたコミットがそのまま本番へ出ます。**`main` にブランチ保護を
+> かけ、`verify` / `E2E` / `Secret scan` を必須チェックにしてください。**
+> （リポジトリの設定なので、コードからは確かめられません）
 
 この構成なら、Cloudflare の API トークンを GitHub に置く必要がありません。
 
@@ -257,6 +271,29 @@ GitHub Actions からデプロイする必要が生じた場合のみ：
 
 > **`TURNSTILE_EXPECTED_HOSTS` を直し忘れると、ボット検査が全滅します。**
 > 共有ウィジェットのため、hostname 照合だけがサービスを分けています。
+
+---
+
+## 7-2. 委託先（DB・メール・決済・ホスティング）を変えるとき
+
+> **★プライバシーポリシーを同じコミットで直すこと。★**
+> 2026-08-18 に本番の DB を Neon（シンガポール）から Supabase（東京）へ
+> 移したとき、ここを見落としました。結果として、**実際に全個人情報を
+> 預けている事業者が公表されておらず、預けていない事業者が公表されている**
+> 状態が1週間続きました（2026-08-25 の公開前監査で発覚）。
+> 開示請求に対して嘘の一覧を出すことになります。
+
+1. `app/routes/legal.privacy.tsx` の `PROCESSORS`（事業者名・取り扱う情報・所在地）
+2. 同ファイルの越境移転の記述（**相手国を名指しする**。個人情報保護法28条）
+3. 端末から直接叩く先が増えたなら「お客様の端末から外部へ送信される情報」の表
+   （**電気通信事業法27条の12**。送信先・送信される情報・利用目的の3つが要る）
+4. `lastUpdated` の日付
+5. `test/privacy-processors.test.ts` の `HOST_TO_PROCESSOR` / `BINDING_PROCESSORS`
+6. `SECURITY.md` のローテーション手順（事業者ごとに操作が違う）
+7. `OPERATIONS.md` の復旧手順（**時点復旧の有無は事業者によって違う**）
+
+5 の検査が、コードの接続先とポリシーの記載のずれを機械的に止めます。
+新しい外部サービスを足すと、まずここが落ちます。
 
 ---
 

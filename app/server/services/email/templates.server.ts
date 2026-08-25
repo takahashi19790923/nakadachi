@@ -344,6 +344,53 @@ export function opsPaymentAlertEmail(options: {
 }
 
 /**
+ * 定期処理が落ちたことを知らせる（運営者宛）。
+ *
+ * ★ログに «failed» と出るだけでは、誰も気づかない。★
+ * OPERATIONS.md には「件数ではなく failed になっていたらその処理は
+ * 落ちている」と書いてあるが、それは★人が自発的にログを読んだとき★にしか
+ * 働かない。とくに書き出し（バックアップ）は、Supabase Free に
+ * PITR が無い以上これが唯一の備えで、落ちていることに気づくのが
+ * 「戻したい」と思った日になると手遅れになる。
+ */
+export function opsCronAlertEmail(options: {
+  failedTasks: string[];
+  logsUrl: string;
+}): EmailContent {
+  const isBackup = options.failedTasks.includes("exportDatabase");
+  const heading = isBackup
+    ? "★バックアップの書き出しが落ちています★"
+    : "定期処理が落ちています";
+
+  const detail = isBackup
+    ? "データベースの日次の書き出しに失敗しました。本番の DB（Supabase Free）には DB 側のバックアップも時点復旧もありません。★この書き出しが唯一の備えです。★ 落ちたままだと、復旧が必要になった日に使える写しがありません。"
+    : "定期処理のいずれかが最後まで終わりませんでした。退会後の削除、発信者情報の削除、掲載の期限切れなど、利用者との約束に直結するものが含まれます。";
+
+  const list = options.failedTasks.join("、");
+
+  const { html, text } = layout({
+    heading,
+    bodyHtml: `
+      <p style="margin:0 0 12px">${escapeHtml(detail)}</p>
+      <p style="margin:0 0 12px">落ちた処理: <strong>${escapeHtml(list)}</strong></p>
+      <p style="margin:0;font-size:13px;color:#6d6759">
+        この通知は同じ処理につき1日1回だけ送られます。直すまで毎回は鳴りません。
+      </p>`,
+    bodyText: [
+      detail,
+      "",
+      `落ちた処理: ${list}`,
+      "",
+      "この通知は同じ処理につき1日1回だけ送られます。",
+    ].join("\n"),
+    actionUrl: options.logsUrl,
+    actionLabel: "ログを開く",
+  });
+
+  return { subject: `[nakadachi][ops] ${heading}`, html, text };
+}
+
+/**
  * お問い合わせフォームの転送（運営者宛）。
  *
  * ★以前は送っていなかった。★ 画面には「受け付けました。ご返信します」と

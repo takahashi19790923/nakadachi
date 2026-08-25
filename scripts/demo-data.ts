@@ -116,7 +116,10 @@ const DEMO_LISTINGS = [
 
 async function main(): Promise<void> {
   const target = parseTarget(process.argv[2]);
-  if (target === "production") {
+  // ★production-neon も本番。★ 移行元の Neon には実データが残っていて、
+  // 退避路として保持している。片方だけ塞ぐと、綴りを1つ変えるだけで
+  // 本番に仮データが入る（db.ts の確認プロンプトは両方を本番として扱う）。
+  if (target === "production" || target === "production-neon") {
     throw new Error(
       "本番には仮データを入れません。実在しない掲載を出すことになります。",
     );

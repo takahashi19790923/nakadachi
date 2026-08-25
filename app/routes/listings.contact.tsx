@@ -5,6 +5,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { notFound, toPublicError } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { ensureThread } from "~/server/services/message-service.server";
 import type { Route } from "./+types/listings.contact";
 import { getApp } from "~/server/app-context";
@@ -20,6 +21,12 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   const context = getApp(rawContext);
   const user = await requireUser({ request, context });
   if (!isUlid(params.listingId)) throw notFound("malformed id");
+
+  /*
+   * ★読むだけに見えるが、行が増える。★ ensureThread は会話を作る。
+   * 投稿を変えながら開き続ければ、相手の受信箱を埋められる。
+   */
+  await enforceRateLimit(context.getDb(), "threadCreate", user.id);
 
   try {
     const { threadId } = await ensureThread({

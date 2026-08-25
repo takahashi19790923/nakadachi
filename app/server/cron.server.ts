@@ -12,6 +12,8 @@ import {
   exportDatabase,
   pruneOldBackups,
 } from "./services/backup-service.server.ts";
+import { sendEmail } from "./services/email/email-service.server.ts";
+import { opsCronAlertEmail } from "./services/email/templates.server.ts";
 import { notifyExpiringListings } from "./services/notification-service.server.ts";
 import { reconcilePayments } from "./services/payment/reconcile-service.server.ts";
 import {
@@ -234,5 +236,63 @@ export async function runScheduledTasks(options: {
       : await runDaily(context, now);
 
   logger.info("cron finished", { cron, ...result });
+
+  // ★落ちたものがあれば、ログだけで終わらせない。★
+  await alertOnFailures(context, result, now);
+
   return result;
+}
+
+/**
+ * 落ちた処理を運営者へ知らせる。
+ *
+ * ★「ログに failed と出る」は監視ではない。★ 人が自発的にログを開いた
+ * ときにしか働かない。決済の突き合わせ（reconcile-service）には
+ * すでにメールの警報があり、そちらは実際に機能している。同じ形を
+ * 定期処理全体にも用意する。
+ *
+ * 冪等キーに日付を入れて1日1通に抑える。直すまで毎時鳴ると、
+ * 慣れて読まなくなり、本当に見るべき日に見落とす。
+ *
+ * ★ここで失敗しても定期処理の結果は変えない。★ 知らせられなかった
+ * ことは、処理そのものの成否とは別。
+ */
+async function alertOnFailures(
+  context: TaskContext,
+  result: CronResult,
+  now: Date,
+): Promise<void> {
+  const { db, env, logger } = context;
+
+  const failedTasks = Object.entries(result)
+    .filter(([, value]) => value === "failed")
+    .map(([name]) => name);
+  if (failedTasks.length === 0) return;
+
+  const to = env.EMAIL_REPLY_TO;
+  if (!to) {
+    logger.error("cron failed but EMAIL_REPLY_TO is not configured", undefined, {
+      failedTasks: failedTasks.join(","),
+    });
+    return;
+  }
+
+  const day = now.toISOString().slice(0, 10);
+  await sendEmail(
+    {
+      template: "ops_cron_alert",
+      to,
+      content: opsCronAlertEmail({
+        failedTasks,
+        logsUrl: new URL("/admin", env.APP_ORIGIN).toString(),
+      }),
+      // 落ちた処理の組み合わせごとに1日1通。
+      idempotencyKey: `ops_cron_alert:${failedTasks.join("-")}:${day}`.slice(0, 120),
+    },
+    { db, env, logger },
+  ).catch((error: unknown) => {
+    logger.error("cron alert email failed", error, {
+      failedTasks: failedTasks.join(","),
+    });
+  });
 }
