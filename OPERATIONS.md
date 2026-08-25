@@ -106,6 +106,13 @@ DB まで実際に触ります。返すのは真偽と所要ミリ秒だけで�
 設定の反映を確認する口です。**秘密の値そのものは返しません。**
 「直したがデプロイし忘れた」をここで捕まえます。
 
+> **★管理者としてログインし、第3層まで通ってから見ます（2026-08-25〜）。★**
+> 未ログインでは **404** です。それ以前は誰でも叩けましたが、中身の
+> `secretsConfigured` は「いま、どの守りが効いていないか」の一覧そのもので、
+> `turnstile: false` と読めばボット対策が外れている隙をそのまま狙えます。
+> ブラウザで管理画面にログインしてから `/api/config` を開いてください
+> （**curl では確認になりません**。Cookie が要ります）。
+
 ### 決済の突き合わせ（毎時、自動）
 
 ★いちばん怖い壊れ方は「決済が成功しているのに掲載が出ない」。★
@@ -217,14 +224,23 @@ R2 のバージョニングか別リージョンへの複製を検討してく�
    > `nakadachi-backups` → `db/` で見るのがいちばん早いです。
    > CLI だけで確かめるなら、日付を1日ずつ遡って `get` を試します。
 
+   > **★落とし先は必ず `db-backup/` にすること。★**
+   > 写しの中身は利用者の投稿・メッセージ・暗号化済みメールアドレス・
+   > 決済記録・**復号できるIPアドレス**です。**このリポジトリは public。**
+   >
+   > 2026-08-26、この手順が `--file ./restore.json`（リポジトリ直下）と
+   > 書いてあったせいで、写しが `git status` に `??` で並んだ。
+   > **`git add -A` を1回打てば、本番の個人情報が全部 public リポジトリに
+   > 入るところだった。** `db-backup/` は `.gitignore` 済みです。
+
    ```bash
-   pnpm exec wrangler r2 object get nakadachi-backups/db/YYYY-MM-DD.json --file ./restore.json --remote
+   pnpm exec wrangler r2 object get nakadachi-backups/db/YYYY-MM-DD.json --file ./db-backup/restore.json --remote
    ```
 
    落としたら、**中身が期待した日のものか**を必ず見ること。
 
    ```bash
-   head -c 120 ./restore.json
+   head -c 120 ./db-backup/restore.json
    ```
 
    `"exportedAt":"YYYY-MM-DDT19:20:..Z"` が出ます。ここが古ければ、
@@ -239,7 +255,7 @@ R2 のバージョニングか別リージョンへの複製を検討してく�
 4. 流し込む（`--replace` は対象の表を空にしてから入れる）
 
    ```bash
-   pnpm run db:restore <対象> ./restore.json --replace
+   pnpm run db:restore <対象> ./db-backup/restore.json --replace
    ```
 
    件数は流し込みの中で突き合わせています。合わなければ**何も入らずに止まります**。
@@ -248,6 +264,14 @@ R2 のバージョニングか別リージョンへの複製を検討してく�
 6. **画面で確かめる。** 一覧・詳細・ログインが動くこと。
    **さらに新しい投稿を1件作れること**（読めるだけでは戻ったことになりません）
 7. **決済との整合を確認する**（下記）
+8. **手元の写しを消す。**
+
+   ```bash
+   rm ./db-backup/restore.json
+   ```
+
+   個人情報の入ったファイルを、作業が終わったあとも PC に置いたままにしない。
+   バックアップソフトや同期フォルダ（OneDrive）に吸われます。
 
 **戻らないもの。** 写しに入っているのは
 `app/server/services/backup-service.server.ts` の `TABLES` にある21表だけです。
