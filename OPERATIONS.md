@@ -207,9 +207,28 @@ R2 のバージョニングか別リージョンへの複製を検討してく�
 1. **まずアプリを止める**（Workers のルートを外す、またはメンテナンス応答にする）
 2. R2 から使う世代を落とす
 
+   > **★キーの日付は UTC。★** 書き出しは UTC 19:20（**JST 04:20**）に走り、
+   > そのときの UTC 日付でキーが決まります。日本時間の午前0時〜午前4時20分は、
+   > 「今日」のキーがまだありません。**JST の日付を入れると
+   > `The specified key does not exist.` になります**（実際にやりました）。
+
+   > **★`wrangler r2 object` に `list` はありません。★**
+   > 何が置いてあるかは、Cloudflare ダッシュボード → R2 →
+   > `nakadachi-backups` → `db/` で見るのがいちばん早いです。
+   > CLI だけで確かめるなら、日付を1日ずつ遡って `get` を試します。
+
    ```bash
-   pnpm exec wrangler r2 object get nakadachi-backups/db/2026-08-25.json --file ./restore.json --remote
+   pnpm exec wrangler r2 object get nakadachi-backups/db/YYYY-MM-DD.json --file ./restore.json --remote
    ```
+
+   落としたら、**中身が期待した日のものか**を必ず見ること。
+
+   ```bash
+   head -c 120 ./restore.json
+   ```
+
+   `"exportedAt":"YYYY-MM-DDT19:20:..Z"` が出ます。ここが古ければ、
+   **その日の書き出しが落ちています**（`ops_cron_alert` のメールが来ているはず）。
 
 3. **戻す先を用意する。** 本番へ直接戻す前に、必ず別の空のプロジェクトで一度試すこと。
 
