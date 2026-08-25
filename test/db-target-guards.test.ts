@@ -126,6 +126,26 @@ describe("★復旧の練習用（drill）★", () => {
     }
   });
 
+  it("手元の使い捨て DB（localhost）は通す", () => {
+    /*
+     * 練習の目的は「本番以外で、実際に戻せることを確かめる」。
+     * 手元の DB は誰とも共有していないので、本番の写しを入れても
+     * 他人の目に触れる経路がない。★共有環境（dev/preview）とは違う。★
+     */
+    /*
+     * ★ホスト名はテンプレートにせず、そのまま書く。★
+     * check-secrets.mjs は `@127.0.0.1` `@localhost` を除外しているが、
+     * ソースに `@${host}` と書くと除外に当たらず、この検査ファイル自体が
+     * コミットできなくなる（実際に止められた）。
+     */
+    for (const url of [
+      "postgresql://postgres:postgres@127.0.0.1:5433/postgres",
+      "postgresql://postgres:postgres@localhost:5433/postgres",
+    ]) {
+      expect(withDrill(url)(), url).toBe(url);
+    }
+  });
+
   it("未設定・ひな型のままなら止まる", () => {
     expect(() => requireConnectionString("drill")).toThrow(/未設定/);
     /*
