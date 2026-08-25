@@ -23,7 +23,20 @@ import * as schema from "../app/db/schema/index.ts";
  *  - production-neon … 移行元の Neon。退避路として当面残す（数日様子を見て消す）
  * dev / preview は引き続き Neon（gentle-wildflower プロジェクト）。
  */
-export type DbTarget = "dev" | "preview" | "production" | "production-neon";
+/**
+ * `drill` は復旧の練習用。★使い捨ての空の Supabase プロジェクトを指す。★
+ *
+ * 本番の写しを実際に戻して、所要時間を測るために使う。dev や preview を
+ * 使わないのは、**本番の個人情報が検証環境へ移ってしまう**ため
+ * （利用者のメッセージ・暗号化済みメールアドレス・復号できるIPが入っている）。
+ * 練習が終わったらプロジェクトごと削除する。
+ */
+export type DbTarget =
+  | "dev"
+  | "preview"
+  | "production"
+  | "production-neon"
+  | "drill";
 
 /** 環境ごとの、期待するデータベース名。貼り間違いを検出するために使う */
 const EXPECTED_DATABASE: Readonly<Record<DbTarget, string>> = {
@@ -33,6 +46,7 @@ const EXPECTED_DATABASE: Readonly<Record<DbTarget, string>> = {
   // 下の EXPECTED_HOST でプロジェクトの ref まで見る。
   production: "postgres",
   "production-neon": "nakadachi",
+  drill: "postgres",
 };
 
 /**
@@ -61,6 +75,7 @@ const ENV_VARIABLE: Readonly<Record<DbTarget, string>> = {
   preview: "DATABASE_URL_PREVIEW",
   production: "DATABASE_URL_PRODUCTION",
   "production-neon": "DATABASE_URL_PRODUCTION_NEON",
+  drill: "DATABASE_URL_DRILL",
 };
 
 /** Supabase の接続文字列か（ホストで見る） */
@@ -73,13 +88,14 @@ export function parseTarget(value: string | undefined): DbTarget {
     value === "preview" ||
     value === "production" ||
     value === "production-neon" ||
-    value === "dev"
+    value === "dev" ||
+    value === "drill"
   ) {
     return value;
   }
   if (value === undefined) return "dev";
   throw new Error(
-    `接続先の指定が不正です: ${value}（dev / preview / production / production-neon のいずれか）`,
+    `接続先の指定が不正です: ${value}（dev / preview / production / production-neon / drill のいずれか）`,
   );
 }
 
@@ -111,16 +127,41 @@ export function requireConnectionString(target: DbTarget): string {
    * （Hyperdrive が自前でプールする。二重にプールしない）。
    */
   if (isSupabaseUrl(value)) {
-    if (target !== "production") {
+    if (target !== "production" && target !== "drill") {
       throw new Error(
         `${variable} が Supabase を指していますが、${target} は Neon のはずです。`,
       );
     }
-    if (!value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
+
+    /*
+     * ★練習用は、本番のプロジェクトを指していたら必ず止める。★
+     *
+     * drill は「使い捨ての空のプロジェクトへ本番の写しを流し込んで、
+     * 所要時間を測る」ためのもの。流し込みは --replace で
+     * **対象の表を全部空にしてから**入れるので、ここが本番を向いていたら
+     * ★本番を消して古い写しで上書きする★。復旧の練習で本番を壊すのは
+     * いちばん間抜けな壊し方なので、環境変数の貼り間違いで済むように
+     * しない。ref をそのまま見る。
+     */
+    if (target === "drill" && value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
+      throw new Error(
+        `★${variable} が本番のプロジェクト（${SUPABASE_PRODUCTION_HOST}）を指しています。★ ` +
+          `drill は使い捨ての空プロジェクト専用です。本番を消してしまうので実行しません。`,
+      );
+    }
+    if (target === "production" && !value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
       throw new Error(
         `${variable} が想定と違う Supabase プロジェクトを指しています（本番は ${SUPABASE_PRODUCTION_HOST}）。`,
       );
     }
+
+    // プーラー（6543 / pooler.supabase.com）は使わない。Direct connection のみ。
+    if (value.includes("pooler.supabase.com") || value.includes(":6543")) {
+      throw new Error(
+        `${variable} がプーラーを指しています。Direct connection（db.<ref>.supabase.co:5432）を使ってください。`,
+      );
+    }
+
     const dbName = /\/([A-Za-z0-9_]+)(\?|$)/.exec(value)?.[1];
     if (dbName !== "postgres") {
       throw new Error(`${variable} のデータベース名が postgres ではありません（${dbName ?? "不明"}）。`);
@@ -130,6 +171,12 @@ export function requireConnectionString(target: DbTarget): string {
   if (target === "production") {
     throw new Error(
       `${variable} が Supabase（${SUPABASE_PRODUCTION_HOST}）を指していません。本番は 2026-08-18 に Supabase へ移りました。Neon を指すなら production-neon を使ってください。`,
+    );
+  }
+  if (target === "drill") {
+    throw new Error(
+      `${variable} が Supabase を指していません。drill は使い捨ての Supabase プロジェクト（db.<ref>.supabase.co:5432）専用です。` +
+        `★dev や preview を練習に使わないでください。★ 本番の個人情報が検証環境へ移ります。`,
     );
   }
 
@@ -224,7 +271,9 @@ export function describeTarget(target: DbTarget): string {
       ? "Supabase 東京"
       : target === "production-neon"
         ? "Neon シンガポール・移行元"
-        : "Neon";
+        : target === "drill"
+          ? "★復旧の練習用・使い捨ての Supabase★"
+          : "Neon";
   return `${target}（${where} / データベース: ${EXPECTED_DATABASE[target]}）`;
 }
 
