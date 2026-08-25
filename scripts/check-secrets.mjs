@@ -95,6 +95,32 @@ for (const file of targets) {
     continue; // バイナリや新規ファイルは飛ばす
   }
 
+  /*
+   * ★DB の写しは名前ではなく «形» で止める。★
+   *
+   * 2026-08-26、復旧の練習で R2 から落とした写しが `restore.json` として
+   * リポジトリ直下に置かれ、`git status` に `??` で並んだ。
+   * ★`git add -A` を1回打てば、本番の個人情報が全部 public リポジトリに
+   * 入るところだった。★ .gitignore にも名前を足したが、名前は変えられる
+   * （`data.json`、`x.json`、拡張子なし）。中身で判定する。
+   *
+   * backup-service.server.ts が作る形（version + exportedAt + tables[]）に
+   * 当てる。写しは 70KB 以上あるので、先頭だけ見れば足りる。
+   */
+  const head = contents.slice(0, 400);
+  if (
+    /"version"\s*:\s*1/.test(head) &&
+    /"exportedAt"\s*:/.test(head) &&
+    /"tables"\s*:\s*\[/.test(head)
+  ) {
+    problems.push(
+      `${file}: ★データベースの写しです。★ 利用者の投稿・メッセージ・` +
+        `暗号化済みメールアドレス・決済記録・復号できるIPアドレスが入っています。` +
+        `db-backup/ へ移してください（このリポジトリは public です）`,
+    );
+    continue;
+  }
+
   for (const pattern of PATTERNS) {
     if (pattern.re.test(contents)) {
       problems.push(`${file}: ${pattern.name} らしき文字列があります`);
