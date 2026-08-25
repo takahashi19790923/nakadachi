@@ -273,6 +273,12 @@ export async function createRefund(options: {
 
 // ── Webhook の署名検証 ────────────────────────────────────────────
 
+/**
+ * 1つのヘッダから照合する v1 署名の上限。
+ * Stripe が複数付けるのは鍵の切り替え中だけで、実際は2つ（新旧）。
+ */
+const MAX_SIGNATURE_CANDIDATES = 5;
+
 export class WebhookSignatureError extends Error {
   constructor(reason: string) {
     super(`webhook signature rejected: ${reason}`);
@@ -309,13 +315,30 @@ export async function verifyWebhookSignature(options: {
     throw new WebhookSignatureError("header missing");
   }
 
+  /*
+   * ★候補として受け付ける署名の数を先に区切る。★
+   *
+   * ヘッダは攻撃者が自由に作れる。v1= を10万個並べたヘッダを送られると、
+   * 1つ1つに対して HMAC-SHA256 を計算することになり、1リクエストで
+   * こちらの CPU を焼き切れる。攻撃側の費用は文字列を並べるだけ。
+   *
+   * Stripe が複数の v1 を付けるのは、署名シークレットを切り替えている
+   * 最中だけで、実際には2つ（新旧）。5あれば足りる。
+   * ヘッダ自体の長さも先に見る（split の前に止める）。
+   */
+  if (options.signatureHeader.length > 1024) {
+    throw new WebhookSignatureError("header too long");
+  }
+
   let timestamp: string | null = null;
   const signatures: string[] = [];
   for (const part of options.signatureHeader.split(",")) {
     const [key, value] = part.split("=", 2);
     if (!key || !value) continue;
     if (key.trim() === "t") timestamp = value.trim();
-    if (key.trim() === "v1") signatures.push(value.trim());
+    if (key.trim() === "v1" && signatures.length < MAX_SIGNATURE_CANDIDATES) {
+      signatures.push(value.trim());
+    }
   }
 
   if (!timestamp || signatures.length === 0) {

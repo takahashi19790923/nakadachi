@@ -33,7 +33,7 @@ import type { Logger } from "../logger.server.ts";
  * ★順序に意味がある。★ 復旧時にこの順で流せば外部キーが満たされる。
  * 親から子へ並べること。
  */
-const TABLES = [
+export const TABLES = [
   "locations",
   "categories",
   "banned_words",

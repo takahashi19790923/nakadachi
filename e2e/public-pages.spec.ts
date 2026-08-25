@@ -1,6 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 /**
+ * 期待する環境を、接続先の URL から決める。
+ *
+ * ★/api/config には聞かない。★ あれは管理者しか読めない（2026-08-25 に閉じた）。
+ * 「検査したい相手そのものに、期待値を教えてもらう」形もそもそも弱い。
+ */
+function expectedEnvironment(): "development" | "preview" | "production" {
+  const base = process.env.E2E_BASE_URL ?? "http://localhost:5273";
+  const host = new URL(base).hostname;
+  if (host === "nakadachi.rewrite-co.com") return "production";
+  if (host === "nakadachi-preview.rewrite-co.com") return "preview";
+  return "development";
+}
+
+/**
  * DB を必要としない公開画面。
  *
  * 投稿の一覧・詳細・検索は Neon への接続が要るため、ここでは扱わない
@@ -105,20 +119,16 @@ test.describe("機械向けの口", () => {
    * preview や開発環境は本番とほぼ同じ内容を別のホスト名で配るので、
    * 索引に入ると同じ投稿が2つの URL で並ぶ。本番以外は丸ごと拒否する。
    * E2E_BASE_URL を preview や本番へ向けても、そのまま正しく検査できるよう
-   * /api/config が申告する環境で期待値を切り替える。
+   * 接続先のホスト名から期待値を切り替える（expectedEnvironment）。
    */
   test("robots.txt が環境に応じた内容で返る", async ({ request }) => {
-    const config = (await (await request.get("/api/config")).json()) as {
-      environment: string;
-    };
-
     const response = await request.get("/robots.txt");
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("text/plain");
 
     const body = await response.text();
 
-    if (config.environment === "production") {
+    if (expectedEnvironment() === "production") {
       expect(body).toContain("Disallow: /mypage");
       expect(body).toContain("Disallow: /admin");
       expect(body).toContain("Sitemap:");
@@ -131,32 +141,83 @@ test.describe("機械向けの口", () => {
   });
 
   test("★本番以外は X-Robots-Tag で索引を拒否する★", async ({ request }) => {
-    const config = (await (await request.get("/api/config")).json()) as {
-      environment: string;
-    };
     const header = (await request.get("/")).headers()["x-robots-tag"];
 
-    if (config.environment === "production") {
+    if (expectedEnvironment() === "production") {
       expect(header).toBeUndefined();
     } else {
       expect(header).toBe("noindex, nofollow");
     }
   });
 
-  test("★/api/config が実際に配っているサイトキーを見せる★", async ({ request }) => {
-    const response = await request.get("/api/config");
-    expect(response.status()).toBe(200);
+  /*
+   * ★/api/config は誰にでも見せない。★
+   *
+   * この検査は 2026-08-25 の公開前監査で**逆向きに書き直した**。
+   * それまでは「誰でも叩けて中身が読める」ことを確かめていて、
+   * この spec 自身が環境の判定に使っていた。
+   *
+   * 中身の secretsConfigured は「いま、どの守りが効いていないか」の一覧
+   * そのもので、turnstile:false と読めばボット対策が外れている隙を
+   * そのまま狙える。turnstileExpectedHosts は、1つの共有ウィジェットを
+   * 全サービスで使い回している以上、他サービス向けのトークンを弾く
+   * 唯一の材料でもある。
+   */
+  test("★/api/config は未ログインでは読めない★", async ({ request }) => {
+    const response = await request.get("/api/config", {
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
 
-    const body = (await response.json()) as {
-      turnstileSiteKey: string;
-      secretsConfigured: Record<string, boolean>;
-    };
-    // 空なら、動いていてもボット対策は効いていない。
-    expect(body.turnstileSiteKey).not.toBe("");
-    // 値そのものは返していないこと
-    expect(JSON.stringify(body)).not.toContain("sk_");
-    expect(JSON.stringify(body)).not.toContain("whsec_");
-    expect(typeof body.secretsConfigured.stripe).toBe("boolean");
+    // 管理者以外には「そこに何かある」ことも見せない（404）。
+    // 管理者ログイン済みで第3層が未通過なら /admin/gate へ送られる（3xx）。
+    expect(response.status()).not.toBe(200);
+
+    const body = await response.text();
+    expect(body).not.toContain("secretsConfigured");
+    expect(body).not.toContain("turnstileExpectedHosts");
+  });
+
+  /*
+   * ボット対策が画面に繋がっていること。
+   * 置き場所と、組み立てる側のコードの2つを見る。
+   */
+  test("★ログイン画面に Turnstile が組み込まれている★", async ({
+    request,
+  }) => {
+    const html = await (await request.get("/login")).text();
+
+    /*
+     * ★スクリプトのタグは SSR の HTML には出ない。★ ウィジェットは
+     * render=explicit で、api.js はハイドレーション後に JS が差し込む。
+     * サーバーが返す HTML にあるのは、置き場所の div と鍵だけ。
+     *
+     * 置き場所の id は "turnstile" にしてはいけない。ブラウザが
+     * window.turnstile をその div にしてしまい、api.js が初期化を諦める。
+     */
+    expect(html).toContain('id="cf-turnstile-container"');
+
+    // ウィジェットを組み立てる側のコードが実際に読み込まれていること。
+    expect(html).toMatch(/assets\/turnstile-[\w-]+\.js/);
+
+    /*
+     * ★サイトキーの «値» はここでは見ない。★
+     *
+     * ハイドレーションの本文は turbo-stream で、キーと値が別々の要素に
+     * 分かれて並ぶ（`"turnstileSiteKey":"..."` という形にはならない）。
+     * しかも本文はストリームなので、request.get() が受け取る最初の塊に
+     * 入っているとは限らない。無理に照合すると、★実際には入っているのに
+     * «見つからない» と言う検査★になり、直すために本物の穴を
+     * 見落とすほうへ流れる。
+     *
+     * 配られている値そのものは、管理者として /api/config を見るのが
+     * 正しい確かめ方（2026-08-25 にこの口を第3層の内側へ移した）。
+     * 手順は OPERATIONS.md。
+     */
+
+    // 秘密の側が紛れていないこと
+    expect(html).not.toContain("sk_");
+    expect(html).not.toContain("whsec_");
   });
 });
 

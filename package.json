@@ -35,7 +35,10 @@
     "cf-typegen": "wrangler types",
     "postinstall": "wrangler types",
     "db:migrate-to-supabase": "node --experimental-strip-types scripts/migrate-to-supabase.ts",
-    "db:create-app-role": "node --experimental-strip-types scripts/create-app-role.ts"
+    "db:create-app-role": "node --experimental-strip-types scripts/create-app-role.ts",
+    "db:harden": "node --experimental-strip-types scripts/harden-db.ts",
+    "db:restore": "node --experimental-strip-types scripts/restore.ts",
+    "sbom": "pnpm dlx @cyclonedx/cyclonedx-npm@latest --omit dev --output-file docs/sbom.json"
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",

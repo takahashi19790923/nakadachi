@@ -20,14 +20,47 @@ import { getApp } from "~/server/app-context";
  * ★CSRF トークンは要求しない。★ 外部からの正当な POST なので、
  * 検証は署名で行う。逆に Origin 検証も行わない（Stripe は付けない）。
  */
+
+/**
+ * 署名を確かめる前に受け入れる本文の上限。
+ *
+ * Stripe の実際のイベントは大きいものでも数十KB。1MB は十分な余裕で、
+ * かつ未認証の相手に読ませてよい量としては小さい。
+ */
+const MAX_WEBHOOK_BYTES = 1_048_576;
 export async function action({ request, context: rawContext }: Route.ActionArgs) {
   const context = getApp(rawContext);
   if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
+  /*
+   * ★署名を確かめる前に、本文の大きさで足切りする。★
+   *
+   * この口は誰でも叩ける（署名の確認そのものが認証なので、確認前は
+   * 未認証の相手を相手にしている）。request.text() は上限を持たないので、
+   * 100MB の本文を送られると、署名が合わないと分かる前に全部読み込み、
+   * その全体に対して HMAC を2回計算する。攻撃側の費用はほぼゼロで、
+   * こちら側だけが CPU を焼く。Stripe の実際のイベントは大きくても
+   * 数十KB なので、1MB あれば十分に余裕がある。
+   */
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (declaredLength > MAX_WEBHOOK_BYTES) {
+    context.logger.warn("stripe webhook rejected: body too large", {
+      declaredLength,
+    });
+    return new Response("payload too large", { status: 413 });
+  }
+
   // ★本文はテキストとして読む。★ 署名は生のバイト列に対して計算されている。
+  // content-length は自己申告なので、読み切ってからも実測で確かめる。
   const payload = await request.text();
+  if (payload.length > MAX_WEBHOOK_BYTES) {
+    context.logger.warn("stripe webhook rejected: body too large (actual)", {
+      length: payload.length,
+    });
+    return new Response("payload too large", { status: 413 });
+  }
 
   let event;
   try {

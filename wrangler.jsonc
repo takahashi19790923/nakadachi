@@ -21,6 +21,14 @@
 	},
 	"upload_source_maps": true,
 
+	// ★トップレベルでも workers.dev を閉じる。★
+	// ここは開発用の設定（ENVIRONMENT: development、APP_ORIGIN が localhost）で、
+	// routes も無い。`--env` を付けずに build → deploy すると、この設定のまま
+	// *.workers.dev に公開される。中身は同じなのに canonicalRedirect が
+	// 効かず（development では null を返す）、Turnstile のホスト名照合も
+	// 外れる URL が1つ増える。env 側と同じく、既定に頼らず書いておく。
+	"workers_dev": false,
+
 	// ★1リクエストが使える CPU 時間の上限。★
 	// 既定は30秒。ハングやループを踏んだとき、既定のままだと1リクエストで
 	// 30秒ぶんの CPU を焼く。実測は平均 6.2ms/リクエストなので 1000ms でも

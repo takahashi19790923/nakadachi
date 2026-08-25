@@ -58,11 +58,40 @@ export function safeRedirectPath(
   fallback = "/mypage",
 ): string {
   if (typeof value !== "string" || value === "") return fallback;
-  if (!value.startsWith("/")) return fallback;
-  if (value.startsWith("//")) return fallback;
+
+  /*
+   * ★先にタブと改行を取り除く。★
+   *
+   * URL の仕様（WHATWG）では、タブ・CR・LF は解釈の前に取り除かれる。
+   * ブラウザは Location ヘッダもそう読む。つまり "/<TAB>/evil.com" は
+   * 先頭が "/" で "//" でもないので前の検査を素通りし、★ブラウザ側では
+   * "//evil.com" になって外部サイトへ飛ぶ。★ タブは HTTP ヘッダの値として
+   * 正当な文字なので、ヘッダに載せる時点でも弾かれない
+   * （2026-08-19 の公開前監査で実測。CR/LF は Headers が例外にするので 500 になる）。
+   *
+   * ★このサイトはパスワードを持たない。★ ログイン画面をまねた偽サイトへ
+   * 自分のドメインから送り出せると、6桁のコードを取られてそのまま乗っ取られる。
+   */
+  const cleaned = value.replace(/[\t\n\r]/g, "");
+  if (!cleaned.startsWith("/")) return fallback;
+  if (cleaned.startsWith("//")) return fallback;
   // バックスラッシュを / と解釈するブラウザがあるため、混在も拒否する。
-  if (value.includes("\\")) return fallback;
-  return value;
+  if (cleaned.includes("\\")) return fallback;
+
+  /*
+   * ★最後はパーサ自身に確かめさせる。★ 文字列の前方一致だけで守ろうとすると、
+   * 「仕様上ここで消える文字」を1つ見落とすたびに穴が開く。実在しない
+   * オリジンを基準に解決させ、同じオリジンに留まったものだけ通す。
+   */
+  const base = "https://redirect-check.invalid";
+  let resolved: URL;
+  try {
+    resolved = new URL(cleaned, base);
+  } catch {
+    return fallback;
+  }
+  if (resolved.origin !== base) return fallback;
+  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
 /**

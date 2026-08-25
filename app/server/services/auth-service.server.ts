@@ -69,12 +69,21 @@ export async function requestLoginCode(options: {
   const sessionSecret = requireSecret(env, "SESSION_SECRET");
   const emailHmac = await emailIndexHmac(indexKey, email);
 
+  /*
+   * ★短い窓と1日の総量を両方見る。★ 10分10回だけだと、待てば1日1,440通に
+   * なる。送信事業者の枠が尽きた時点で、このサイトは合言葉を持たない
+   * （メールでしか入れない）ので全員が締め出される。窓を短くすると
+   * 正規の利用者が困るので、上限を2段にして1日側で頭を押さえる。
+   */
   const ip = clientIp(request);
   if (ip) {
-    await enforceRateLimit(db, "authRequestByIp", await hashIp(sessionSecret, ip));
+    const ipHash = await hashIp(sessionSecret, ip);
+    await enforceRateLimit(db, "authRequestByIp", ipHash);
+    await enforceRateLimit(db, "authRequestByIpDaily", ipHash);
   }
   // アドレス単位でも絞る。他人のアドレスへ大量に送りつける嫌がらせを防ぐ。
   await enforceRateLimit(db, "authRequestByEmail", emailHmac);
+  await enforceRateLimit(db, "authRequestByEmailDaily", emailHmac);
 
   const existing = await findUserByEmailHmac(db, emailHmac);
   if (existing && existing.status === "suspended") {

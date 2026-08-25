@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+
+import { emailDeliveryLogs } from "~/db/schema/index.ts";
 
 import type { Db } from "~/server/db.server";
 import type { AppEnv } from "~/server/env.server";
@@ -241,5 +244,72 @@ describe("日次の中で毎日書き出す", () => {
     expect(objects.size).toBe(1);
     // ★書き出しが落ちても、約束した削除は走ること。★
     expect(result.purgeAccounts).not.toBe("failed");
+  });
+});
+
+/**
+ * 落ちたときに、知らせが出るか。
+ *
+ * ★「ログに failed と出る」は監視ではない。★ 人が自発的にログを開いた
+ * ときにしか働かない。とくに書き出しは、Supabase Free に時点復旧が無い
+ * 以上これが唯一の備えで、静かに落ち続けると気づくのは
+ * 「戻したい」と思った日になる。
+ *
+ * 異常検知そのものも検査する —— 正常なときに鳴らないことまで見る。
+ * 「落ちれば鳴る」だけだと、鳴りっぱなしでも緑になる。
+ */
+describe("定期処理が落ちたときの知らせ", () => {
+  async function opsAlerts(): Promise<string[]> {
+    const rows = await db
+      .select({ key: emailDeliveryLogs.idempotencyKey })
+      .from(emailDeliveryLogs)
+      .where(eq(emailDeliveryLogs.template, "ops_cron_alert"));
+    return rows.map((r) => r.key);
+  }
+
+  it("書き出しが落ちると ops 宛の通知が積まれる", async () => {
+    // BACKUPS を外す。exportDatabase は binding が無ければ投げる。
+    const env = { ...testEnv(), BACKUPS: undefined as unknown as R2Bucket };
+
+    const result = await runScheduledTasks({
+      cron: CRON_DAILY,
+      db,
+      env,
+      logger: testLogger,
+      now: new Date("2026-08-25T19:20:00Z"),
+    });
+
+    expect(result.exportDatabase).toBe("failed");
+
+    const alerts = await opsAlerts();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("exportDatabase");
+    expect(alerts[0]).toContain("2026-08-25");
+  });
+
+  it("同じ日に2回落ちても、知らせは1通だけ", async () => {
+    const env = { ...testEnv(), BACKUPS: undefined as unknown as R2Bucket };
+    const now = new Date("2026-08-25T19:20:00Z");
+    const args = { cron: CRON_DAILY, db, env, logger: testLogger, now };
+
+    await runScheduledTasks(args);
+    await runScheduledTasks(args);
+
+    // ★直すまで毎回鳴ると、慣れて読まなくなる。★
+    expect(await opsAlerts()).toHaveLength(1);
+  });
+
+  it("★正常なときは鳴らない★", async () => {
+    const { binding } = fakeBucket();
+    const result = await runScheduledTasks({
+      cron: CRON_DAILY,
+      db,
+      env: envWith(binding),
+      logger: testLogger,
+      now: new Date("2026-08-25T19:20:00Z"),
+    });
+
+    expect(result.exportDatabase).not.toBe("failed");
+    expect(await opsAlerts()).toEqual([]);
   });
 });

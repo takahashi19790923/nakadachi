@@ -16,11 +16,35 @@ permissions:
   contents: read
 
 jobs:
+  # ★private になったことを目に見える形で知らせる。★
+  #
+  # 以前は analyze ジョブに `if: private == false` を付けていた。すると
+  # private にした瞬間にジョブは「スキップ」になり、GitHub の画面では
+  # ★成功と見分けがつかない★。SAST が0になったことを誰にも告げないまま、
+  # 何か月も続きうる（2026-08-25 の公開前監査で指摘）。
+  # 常に走るジョブを1つ置いて、状態を必ず出す。
+  guard:
+    name: 前提の確認
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 可視性を確認する
+        run: |
+          if [ "${{ github.event.repository.private }}" = "true" ]; then
+            echo "::warning::★このリポジトリは private です。CodeQL（SAST）は動いていません。★ private で Code Scanning を使うには GitHub Advanced Security が要ります。public に戻すか、GHAS を有効にするか、代わりの SAST を入れてください。"
+            echo "### ⚠ CodeQL は動いていません" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "private リポジトリでは GitHub Advanced Security が必要です。**現在このリポジトリの静的解析は行われていません。**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "public リポジトリです。CodeQL を実行します。"
+          fi
+
   analyze:
     name: 解析
     # ★private リポジトリでは Code Scanning に GitHub Advanced Security が要る。★
     # 無い状態で動かすと結果の送信で必ず失敗し、毎回赤くなる。
     # 赤が常態化すると、本当の失敗を誰も見なくなる。公開にすれば自動で有効。
+    # スキップしたことは上の guard ジョブが警告として出す。
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 30

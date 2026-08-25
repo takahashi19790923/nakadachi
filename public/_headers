@@ -18,8 +18,29 @@
 /site.webmanifest
   Cache-Control: public, max-age=86400
 
-# 静的アセットは Worker を通らないので、applySecurityHeaders が効かない。
-# 最低限の2つだけここでも付ける。
+# ★静的アセットは Worker を通らないので、applySecurityHeaders が効かない。★
+#
+# 以前はここに nosniff と Referrer-Policy の2つしか無かった。すると
+# 「そのサイトで最初に受け取った応答が静的ファイル」という経路
+# （OG 画像の取得、ブックマークした /favicon.svg、クローラ）では
+# HSTS が1度も届かない。HTTPS を覚えていないブラウザは、次の遷移を
+# http:// に落とされうる。オリジン全体で同じ約束をするために、
+# Worker 側と同じものをここにも並べる（2026-08-25 の公開前監査）。
+#
+# CSP は静的ファイル向けの固い既定にする。nonce は毎回変わるので
+# ここには書けないが、HTML ではないファイルに必要なのは
+# 「何も読み込ませない」ことだけ。
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Frame-Options: DENY
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+  Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'
+
+# 脆弱性の報告先。RFC 9116。CSP は上の default-src 'none' のままでよい。
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=86400

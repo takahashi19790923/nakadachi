@@ -32,8 +32,20 @@ export interface RateLimitPolicy {
 export const RATE_LIMITS = {
   /** ログインメールの送信要求（IP 単位） */
   authRequestByIp: { windowSeconds: 600, max: 10 },
+  /**
+   * ログインメールの送信要求（IP 単位・1日）。
+   *
+   * ★10分の窓だけでは1日の総量が抑えられない。★ 600秒10回は待てば
+   * 1日1,440通になり、1つの IP だけで Resend の無料枠（1日100通）を
+   * 14倍超過させられる。枠が尽きた瞬間、このサイトは合言葉が無い
+   * （メールでしかログインできない）ので★全員が締め出される★。
+   * 窓を短くすると正規の利用者が困るので、1日の総量を別に持つ。
+   */
+  authRequestByIpDaily: { windowSeconds: 86_400, max: 50 },
   /** ログインメールの送信要求（アドレス単位）。他人のアドレスへの嫌がらせ送信も抑える */
   authRequestByEmail: { windowSeconds: 600, max: 5 },
+  /** ログインメールの送信要求（アドレス単位・1日） */
+  authRequestByEmailDaily: { windowSeconds: 86_400, max: 20 },
   /** OTP・リンクの検証（IP 単位） */
   authVerifyByIp: { windowSeconds: 600, max: 20 },
   /** OTP の検証（トークン単位） */
@@ -44,6 +56,15 @@ export const RATE_LIMITS = {
   checkoutCreate: { windowSeconds: 3600, max: 20 },
   /** メッセージ送信 */
   messageSend: { windowSeconds: 300, max: 30 },
+  /**
+   * 会話の開始。
+   *
+   * ★GET でも行が増える経路がある。★ /listings/:id/contact のローダーは
+   * ensureThread を呼ぶので、開いただけで会話が1つできる。同じ投稿への
+   * 2回目は増えないが、投稿を変えれば何度でも増やせて、そのたびに
+   * 相手の受信箱に並ぶ。読むだけに見える操作に上限が要る。
+   */
+  threadCreate: { windowSeconds: 3600, max: 30 },
   /** 通報 */
   reportCreate: { windowSeconds: 3600, max: 10 },
   /** 画像アップロード */
@@ -52,6 +73,18 @@ export const RATE_LIMITS = {
   contactSend: { windowSeconds: 3600, max: 5 },
   /** 管理画面の第3層 */
   adminGate: { windowSeconds: 900, max: 10 },
+  /**
+   * ★サービス全体で1日に送るメールの総量。★
+   *
+   * IP 単位・アドレス単位の制限は「1人あたり」しか見ない。分散した
+   * 送信要求（IP を変える、アドレスを変える）は素通りする。送信事業者の
+   * 枠が尽きると、ログインコードも決済通知も一切届かなくなる
+   * ＝ サービス全停止と同じなので、蛇口そのものにも上限を置く。
+   *
+   * 運用向けの通知（ops_*）はこの上限の対象外にしてある。
+   * 上限に当たったことを知らせる経路まで一緒に止めたら意味がない。
+   */
+  emailGlobalDaily: { windowSeconds: 86_400, max: 400 },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 export type RateLimitName = keyof typeof RATE_LIMITS;
