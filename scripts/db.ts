@@ -151,6 +151,26 @@ export function requireConnectionString(target: DbTarget): string {
   }
 
   /*
+   * ★復旧の練習だけは localhost を許す。★
+   *
+   * drill の目的は「本番の写しを実際に戻せることを、本番以外で確かめる」。
+   * 手元の使い捨て DB（PGlite / embedded-postgres）は、その条件を
+   * いちばん安全に満たす —— 誰とも共有していないので、本番の個人情報が
+   * 他人の目に触れる経路がない。
+   *
+   * ★dev / preview は許さないままにする。★ あちらは Neon の共有環境で、
+   * 本番の写しを入れると「検証環境なのに本番と同じ重さの管理対象」になる。
+   * localhost かどうかはホストとして見る（部分一致だとパスワードの中身でも当たる）。
+   *
+   * 東京への往復時間は測れない。それは Supabase の使い捨てプロジェクトが
+   * 要る（無料枠はアカウントあたり2つで、本番2つで埋まっている。2026-08-26 確認）。
+   */
+  if (target === "drill") {
+    const host = parsePostgresUrl(value)?.host;
+    if (host === "localhost" || host === "127.0.0.1") return value;
+  }
+
+  /*
    * ★Supabase（本番）。★ データベース名は常に postgres なので、環境の取り違えは
    * ホスト（プロジェクトの ref）で見る。Hyperdrive もスクリプトも Direct connection
    * （5432）を使う。プーラー（6543 / pooler.supabase.com）は使わない
