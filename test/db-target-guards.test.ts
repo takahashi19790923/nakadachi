@@ -96,6 +96,36 @@ describe("★復旧の練習用（drill）★", () => {
     ).toThrow(/プーラー/);
   });
 
+  it("★ホストの «外» に現れた文字列で誤判定しない★", () => {
+    /*
+     * 2026-08-26、CodeQL の「Incomplete URL substring sanitization」で
+     * 止められた形。`value.includes("pooler.supabase.com")` は
+     * ★URL のどこに現れても当たる★ので、ホストは正しい Direct connection
+     * なのに、クエリやパスワードにその文字列があるだけで拒否された。
+     *
+     * 障害の最中に「正しい接続文字列なのに拒否される」のが、いちばん
+     * 時間を溶かす。判定したいのは「ホストが何か」なので、そう書く。
+     *
+     * ★この検査は実際に判別する。★ 部分一致の実装に戻すと落ちることを
+     * 確認済み（最初に書いた «似せたホスト名» の検査は、古い正規表現でも
+     * 通ってしまい、判別できていなかった）。
+     */
+    const url =
+      `postgresql://postgres:${PW}@${SCRATCH_REF}:5432/postgres` +
+      `?sslmode=no-verify&application_name=pooler.supabase.com`;
+    expect(withDrill(url)()).toBe(url);
+  });
+
+  it("似せたホスト名を Supabase として扱わない", () => {
+    // ホストの末尾が supabase.co ではないもの。
+    for (const url of [
+      `postgresql://postgres:${PW}@${PRODUCTION_REF}.evil.example:5432/postgres`,
+      `postgresql://postgres:${PW}@db.abc.supabase.co.evil.example:5432/postgres`,
+    ]) {
+      expect(withDrill(url), url).toThrow(/Supabase を指していません/);
+    }
+  });
+
   it("未設定・ひな型のままなら止まる", () => {
     expect(() => requireConnectionString("drill")).toThrow(/未設定/);
     /*

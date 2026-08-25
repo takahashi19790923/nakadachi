@@ -78,9 +78,39 @@ const ENV_VARIABLE: Readonly<Record<DbTarget, string>> = {
   drill: "DATABASE_URL_DRILL",
 };
 
+/**
+ * 接続文字列を URL として解析する。
+ *
+ * ★ホスト・ポート・データベース名は «部分一致» で判定しない。★
+ * `value.includes("...")` は URL のどこに現れても当たるので、
+ * パスワードやパスの中身、あるいは `pooler.supabase.com.example.net` の
+ * ような別のホストでも真になる（2026-08-26、CodeQL の
+ * 「Incomplete URL substring sanitization」で実際に止められた）。
+ *
+ * 解析できない文字列は null。呼び出し側で弾く。
+ */
+export function parsePostgresUrl(
+  value: string,
+): { host: string; port: string; database: string } | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+      return null;
+    }
+    return {
+      host: url.hostname,
+      port: url.port,
+      database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Supabase の接続文字列か（ホストで見る） */
 export function isSupabaseUrl(value: string): boolean {
-  return /@db\.[a-z0-9]+\.supabase\.co[:/]/.test(value);
+  const host = parsePostgresUrl(value)?.host;
+  return host !== undefined && /^db\.[a-z0-9]+\.supabase\.co$/.test(host);
 }
 
 export function parseTarget(value: string | undefined): DbTarget {
@@ -134,6 +164,18 @@ export function requireConnectionString(target: DbTarget): string {
     }
 
     /*
+     * ★ホスト・ポート・データベース名は «部分一致» で判定しない。★
+     * `value.includes("...")` は URL のどこに現れても当たる —— パスワードや
+     * パスの中身でも、`pooler.supabase.com.example.net` のような別のホストでも。
+     * 2026-08-26、ここを includes で書いたら CodeQL の
+     * 「Incomplete URL substring sanitization」で止められた。
+     */
+    const parsed = parsePostgresUrl(value);
+    if (!parsed) {
+      throw new Error(`${variable} を URL として解釈できません。`);
+    }
+
+    /*
      * ★練習用は、本番のプロジェクトを指していたら必ず止める。★
      *
      * drill は「使い捨ての空のプロジェクトへ本番の写しを流し込んで、
@@ -143,28 +185,32 @@ export function requireConnectionString(target: DbTarget): string {
      * いちばん間抜けな壊し方なので、環境変数の貼り間違いで済むように
      * しない。ref をそのまま見る。
      */
-    if (target === "drill" && value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
+    if (target === "drill" && parsed.host === SUPABASE_PRODUCTION_HOST) {
       throw new Error(
         `★${variable} が本番のプロジェクト（${SUPABASE_PRODUCTION_HOST}）を指しています。★ ` +
           `drill は使い捨ての空プロジェクト専用です。本番を消してしまうので実行しません。`,
       );
     }
-    if (target === "production" && !value.includes(`@${SUPABASE_PRODUCTION_HOST}`)) {
+    if (target === "production" && parsed.host !== SUPABASE_PRODUCTION_HOST) {
       throw new Error(
         `${variable} が想定と違う Supabase プロジェクトを指しています（本番は ${SUPABASE_PRODUCTION_HOST}）。`,
       );
     }
 
-    // プーラー（6543 / pooler.supabase.com）は使わない。Direct connection のみ。
-    if (value.includes("pooler.supabase.com") || value.includes(":6543")) {
+    /*
+     * プーラー（6543 / pooler.supabase.com）は使わない。Direct connection のみ
+     * （Hyperdrive が自前でプールするので、二重にプールしない）。
+     */
+    if (parsed.host.endsWith(".pooler.supabase.com") || parsed.port === "6543") {
       throw new Error(
         `${variable} がプーラーを指しています。Direct connection（db.<ref>.supabase.co:5432）を使ってください。`,
       );
     }
 
-    const dbName = /\/([A-Za-z0-9_]+)(\?|$)/.exec(value)?.[1];
-    if (dbName !== "postgres") {
-      throw new Error(`${variable} のデータベース名が postgres ではありません（${dbName ?? "不明"}）。`);
+    if (parsed.database !== "postgres") {
+      throw new Error(
+        `${variable} のデータベース名が postgres ではありません（${parsed.database || "不明"}）。`,
+      );
     }
     return value;
   }
@@ -200,7 +246,9 @@ export function requireConnectionString(target: DbTarget): string {
 
   // ★エンドポイントも見る。★ 同名のデータベースが別プロジェクトに残っている。
   const hostPrefix = EXPECTED_HOST_PREFIX[target];
-  if (hostPrefix && !value.includes(`@${hostPrefix}`)) {
+  // ここもホストとして見る（部分一致だとパスワードの中身でも当たる）。
+  const neonHost = parsePostgresUrl(value)?.host ?? "";
+  if (hostPrefix && !neonHost.startsWith(hostPrefix)) {
     throw new Error(
       `${variable} が想定と違う Neon エンドポイントを指しています` +
         `（${target} は ${hostPrefix}… のプロジェクト）。` +
@@ -209,7 +257,7 @@ export function requireConnectionString(target: DbTarget): string {
   }
 
   // ★Workers は接続数が読めないので、必ず pooled を使う。★
-  if (!value.includes("-pooler")) {
+  if (!neonHost.includes("-pooler")) {
     throw new Error(
       `${variable} が pooled ではありません。Neon の Connect 画面で「Connection pooling」を ON にした文字列（ホスト名に -pooler が入る）を使ってください。`,
     );
