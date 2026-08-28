@@ -165,6 +165,44 @@ function verificationFailed(detail: string): AppError {
   );
 }
 
+/**
+ * ログインの失敗を記録して、例外を返す。
+ *
+ * ★2026-08-28 まで、ログインの成功も失敗も一切残っていなかった。★
+ * `auth.login_code_requested`（コードを送った）だけがあり、その先で
+ * 通ったのか弾かれたのかは分からない。総当たりを受けても、
+ * 「どのアドレスが・どこから・何回」を後から一切たどれなかった
+ * （ASVS 5.0 L2 の要求項目でもある）。
+ *
+ * ★アドレスそのものは残さない。★ 監査ログは個人情報を含まない形で
+ * 保つと公表しているので、HMAC 済みの索引値だけを入れる。
+ * IP も writeAuditLog がハッシュ化して入れる。
+ *
+ * ★記録できなくてもログインの判定は変えない。★ 監査の失敗で
+ * 利用者を締め出さない（writeAuditLog 自体も投げない作りになっている）。
+ */
+async function failLogin(options: {
+  db: Db;
+  env: AppEnv;
+  request: Request;
+  emailHmac: string | null;
+  /** 粗い理由。総当たりの相手に手がかりを与えない粒度にする */
+  reason: "no_token" | "attempt_limit" | "otp_mismatch" | "bad_link";
+  detail: string;
+}): Promise<AppError> {
+  await writeAuditLog(options.db, options.env, {
+    action: "auth.login_failed",
+    actorRole: "anonymous",
+    targetType: "email_hmac",
+    // ★先頭だけ。★ 列は varchar(40)（writeAuditLog 側でも切っているが、
+    // 呼ぶ側でも «何を入れているか» が読めるようにしておく）。
+    targetId: options.emailHmac?.slice(0, 16),
+    request: options.request,
+    metadata: { reason: options.reason },
+  });
+  return verificationFailed(options.detail);
+}
+
 interface VerifiedIdentity {
   readonly user: UserRecord;
   readonly isNewUser: boolean;
@@ -222,12 +260,31 @@ async function finalize(options: {
   }
 
   if (user.status !== "active") {
+    await writeAuditLog(db, env, {
+      action: "auth.login_failed",
+      actorId: user.id,
+      actorRole: "anonymous",
+      request: options.request,
+      metadata: { reason: `status_${user.status}` },
+    });
     throw new AppError(
       "forbidden",
       "このアカウントはご利用いただけません。お問い合わせください。",
       { detail: `login attempted on status=${user.status}` },
     );
   }
+
+  /*
+   * ★ここが「入れた」の唯一の合流点。★ OTP でもマジックリンクでも
+   * 必ずここを通る。成功だけを残しても意味は薄く、失敗だけでも意味は薄い。
+   * 両方あって初めて「10回失敗したあと1回成功した」が読める。
+   */
+  await writeAuditLog(db, env, {
+    action: "auth.login_succeeded",
+    actorId: user.id,
+    request: options.request,
+    metadata: { newUser: isNewUser ? 1 : 0 },
+  });
 
   return { user, isNewUser };
 }
@@ -275,7 +332,13 @@ export async function verifyLoginOtp(options: {
     .limit(1);
 
   const row = rows[0];
-  if (!row) throw verificationFailed("no active token");
+  if (!row) {
+    throw await failLogin({
+      db, env, request, emailHmac,
+      reason: "no_token",
+      detail: "no active token",
+    });
+  }
 
   await enforceRateLimit(db, "authVerifyByToken", row.id);
 
@@ -285,7 +348,11 @@ export async function verifyLoginOtp(options: {
       .update(emailVerificationTokens)
       .set({ consumedAt: new Date() })
       .where(eq(emailVerificationTokens.id, row.id));
-    throw verificationFailed("attempt limit reached");
+    throw await failLogin({
+      db, env, request, emailHmac,
+      reason: "attempt_limit",
+      detail: "attempt limit reached",
+    });
   }
 
   await db
@@ -297,7 +364,13 @@ export async function verifyLoginOtp(options: {
     await otpHashOf(sessionSecret, row.id, otp),
     row.otpHash,
   );
-  if (!matches) throw verificationFailed("otp mismatch");
+  if (!matches) {
+    throw await failLogin({
+      db, env, request, emailHmac,
+      reason: "otp_mismatch",
+      detail: "otp mismatch",
+    });
+  }
 
   return finalize({
     ...options,
@@ -345,7 +418,14 @@ export async function verifyLoginLink(options: {
     .limit(1);
 
   const row = rows[0];
-  if (!row) throw verificationFailed("link token not found or expired");
+  if (!row) {
+    throw await failLogin({
+      db, env, request,
+      emailHmac: null,
+      reason: "bad_link",
+      detail: "link token not found or expired",
+    });
+  }
 
   return finalize({
     ...options,

@@ -1,7 +1,9 @@
 import { redirect } from "react-router";
 
 import { clearGateCookie } from "~/server/admin-gate.server";
+import { writeAuditLog } from "~/server/audit.server";
 import { assertCsrf } from "~/server/csrf.server";
+import { loadUser } from "~/server/guards.server";
 import { destroySession } from "~/server/session.server";
 import type { Route } from "./+types/logout";
 import { getApp } from "~/server/app-context";
@@ -21,11 +23,26 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
   // ここだけ Origin 照合のみだったので、設計上の穴として1か所残っていた。
   await assertCsrf(request, context.env, await request.formData());
 
+  /*
+   * ★誰がログアウトしたかは、セッションを壊す前に読む。★
+   * 順番を逆にすると actorId が必ず null になり、
+   * 「誰かがログアウトした」としか残らない。
+   */
+  const user = await loadUser({ request, context });
+
   const { setCookie } = await destroySession({
     db: context.getDb(),
     env: context.env,
     request,
   });
+
+  if (user) {
+    await writeAuditLog(context.getDb(), context.env, {
+      action: "auth.logout",
+      actorId: user.id,
+      request,
+    });
+  }
 
   const headers = new Headers();
   headers.append("set-cookie", setCookie);

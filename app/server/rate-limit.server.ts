@@ -155,7 +155,19 @@ export async function consumeRateLimit(
   };
 }
 
-/** 超えていたら 429 で止める。ハンドラの入口で使う */
+/**
+ * 超えていたら 429 で止める。ハンドラの入口で使う。
+ *
+ * ★弾いたことは «ログ» に出す。監査ログ（DB）には書かない。★
+ *
+ * 件数を決めるのは攻撃者の側で、audit_logs は消さない表なので、
+ * ここに1件ずつ書くと★こちらの保管費用が攻撃手段になる★。
+ * Workers Logs は保持期間があり、量にも耐える。調査に必要な
+ * 「どの制限が・どの主体で・何回目に」はそちらに残る。
+ *
+ * 主体（subject）は呼び出し前にハッシュ済み。生の IP やアドレスは
+ * ここへ届かない。
+ */
 export async function enforceRateLimit(
   db: Db,
   name: RateLimitName,
@@ -163,6 +175,17 @@ export async function enforceRateLimit(
 ): Promise<void> {
   const result = await consumeRateLimit(db, name, subject);
   if (!result.allowed) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "rate limit tripped",
+        limit: name,
+        count: result.count,
+        // 突き合わせ用。主体そのものは出さない（ハッシュの先頭だけ）。
+        subject: subject.slice(0, 12),
+        resetAt: result.resetAt.toISOString(),
+      }),
+    );
     throw rateLimited(
       `rate limit ${name} exceeded (count=${result.count})`,
     );

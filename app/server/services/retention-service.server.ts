@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import {
+  AUTH_AUDIT_RETENTION_DAYS,
   EMAIL_LOG_RETENTION_DAYS,
   ENDED_LISTING_STATUSES,
   IMAGE_RETENTION_DAYS,
@@ -134,6 +135,27 @@ export async function purgeOldPayments(db: Db): Promise<number> {
   const result = await db.execute(sql`
     delete from payments
     where created_at <= now() - make_interval(days => ${PAYMENT_RETENTION_DAYS})
+  `);
+  return result.rowCount ?? 0;
+}
+
+/**
+ * 認証まわりの監査ログを消す。
+ *
+ * ★監査ログ全体は消さない。★ ここで消すのは `auth.` と `authz.` で
+ * 始まるものだけ。ログインの失敗は★攻撃者が件数を決められる★ので、
+ * 永久保存の表へ無制限に溜めると保管費用を攻撃手段にされる。
+ *
+ * ★管理操作（admin.*）と決済（payment.*）と退会（account.*）は残す。★
+ * あちらは「誰が何をしたか」の説明責任そのもので、件数も人の操作に
+ * 縛られている。前方一致で消す対象を絞ってあるので、新しい action を
+ * 足すときは接頭辞に注意すること。
+ */
+export async function purgeOldAuthAuditLogs(db: Db): Promise<number> {
+  const result = await db.execute(sql`
+    delete from audit_logs
+    where (action like 'auth.%' or action like 'authz.%')
+      and created_at <= now() - make_interval(days => ${AUTH_AUDIT_RETENTION_DAYS})
   `);
   return result.rowCount ?? 0;
 }

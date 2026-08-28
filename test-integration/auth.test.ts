@@ -1,7 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { emailVerificationTokens, sessions, users } from "~/db/schema/index.ts";
+import {
+  auditLogs,
+  emailVerificationTokens,
+  sessions,
+  users,
+} from "~/db/schema/index.ts";
 import { emailIndexHmac, otpHash, sha256Hex } from "~/server/crypto.server";
 import type { Db } from "~/server/db.server";
 import {
@@ -314,6 +319,37 @@ describe("セッション", () => {
     const token = setCookie.split(";")[0]!.split("=")[1]!;
     return { userId: user.id, cookie: `${env.SESSION_COOKIE_NAME}=${token}` };
   }
+
+  /*
+   * ★成功と失敗の両方が残って初めて意味がある。★
+   * 失敗だけだと「攻撃を受けた」で終わり、成功だけだと「誰が入った」で終わる。
+   * 両方あって「10回失敗したあと1回成功した」＝乗っ取られた、が読める。
+   * （2026-08-28 まで、どちらも一切残っていなかった）
+   */
+  it("★ログインが通ったことが監査ログに残る★", async () => {
+    const email = "audit-success@example.test";
+    await requestLoginCode({ db, env, logger: testLogger, request: req(), email });
+    await verifyLoginOtp({
+      db,
+      env,
+      logger: testLogger,
+      request: req(),
+      email,
+      otp: latestOtp(),
+    });
+
+    const rows = await db
+      .select({ action: auditLogs.action, actorId: auditLogs.actorId })
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "auth.login_succeeded"));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.actorId).toBeTruthy();
+
+    // アドレスは残さない。
+    const all = await db.select().from(auditLogs);
+    expect(JSON.stringify(all)).not.toContain(email);
+  });
 
   it("★セッショントークンを平文で保存しない★", async () => {
     await login("session@example.test");
