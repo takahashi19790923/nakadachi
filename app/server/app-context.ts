@@ -42,6 +42,15 @@ export interface AppContext {
   readonly requestId: string;
   /** フォームへ埋める CSRF トークン */
   readonly csrfToken: string;
+  /**
+   * 応答に Set-Cookie を足す。
+   *
+   * ★ローダーやアクションの戻り値では Cookie を足せない場面がある。★
+   * セッションの期限延長は「どの画面でも、読んだついでに起きる」ので、
+   * 画面ごとに Response を組み立て直す形にはできない。Worker が最後に
+   * まとめて付ける。
+   */
+  readonly setCookie: (value: string) => void;
 }
 
 export const appContext = createContext<AppContext>();

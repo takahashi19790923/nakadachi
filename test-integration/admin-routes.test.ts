@@ -10,7 +10,11 @@ import { csrfCookieName, issueCsrfToken } from "~/server/csrf.server";
 import type { Db } from "~/server/db.server";
 import { getPublishedListing, searchListings } from "~/server/repositories/listing-repository.server";
 import { createReport } from "~/server/repositories/moderation-repository.server";
-import { createSession, getSessionUser } from "~/server/session.server";
+import {
+  createSession,
+  getSessionUser,
+  NO_SESSION_RENEWAL,
+} from "~/server/session.server";
 import {
   closeTestDb,
   makeDraft,
@@ -130,6 +134,8 @@ async function callAction(action: RouteAction, options: CallOptions) {
     logger: testLogger,
     nonce: "test-nonce",
     requestId: "test-request",
+    // 検査では期限の延長を見ていない（延長そのものは auth.test.ts）。
+    setCookie: () => undefined,
     csrfToken: token,
   };
   context.set(appContext, app);
@@ -332,7 +338,7 @@ describe("★利用者を停止する★", () => {
       headers: { cookie: `${env.SESSION_COOKIE_NAME}=${sessionToken}` },
     });
     expect(
-      await getSessionUser({ request: loggedIn, env, getDb: () => db }),
+      await getSessionUser({ request: loggedIn, env, getDb: () => db, renew: NO_SESSION_RENEWAL }),
     ).not.toBeNull();
 
     const result = await callAction(userAction, {
@@ -343,7 +349,7 @@ describe("★利用者を停止する★", () => {
 
     // ★止めても入ったままでは意味がない。★
     expect(
-      await getSessionUser({ request: loggedIn, env, getDb: () => db }),
+      await getSessionUser({ request: loggedIn, env, getDb: () => db, renew: NO_SESSION_RENEWAL }),
     ).toBeNull();
 
     // 行は消さず失効印をつける（いつ切られたかを追えるようにするため）。

@@ -48,6 +48,12 @@ export function loadUser({
     getDb: context.getDb,
     env: context.env,
     request,
+    /*
+     * ★使われたら期限を延ばす配線。★ ここを渡さないと延長が効かない
+     * （型が必須にしてあるので、渡し忘れはコンパイルで止まる）。
+     * DB 更新は応答後（defer）、Cookie は Worker が最後に足す。
+     */
+    renew: { setCookie: context.setCookie, defer: context.defer },
   });
   userByContext.set(context, promise);
   return promise;

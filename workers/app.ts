@@ -85,6 +85,16 @@ export default {
       deferred.push(promise.catch(() => undefined));
     };
 
+    /*
+     * 応答に足す Set-Cookie。いまはセッションの期限延長だけが使う。
+     * ★ローダーの戻り値では足せない。★ 延長はどの画面でも «読んだついでに»
+     * 起きるので、画面ごとに Response を組み立て直す形にできない。
+     */
+    const extraCookies: string[] = [];
+    const setCookie = (value: string): void => {
+      extraCookies.push(value);
+    };
+
     // CSRF の対（Cookie 側の乱数とフォームへ埋める署名付きトークン）を
     // ここで1回だけ用意する。各ローダーが個別に発行すると、同じ画面の中で
     // 別々の値が出て、後から描かれたフォームだけが通らなくなる。
@@ -129,12 +139,17 @@ export default {
         nonce,
         requestId,
         csrfToken,
+        setCookie,
       });
 
       const response = await requestHandler(request, routerContext);
 
       const secured = applySecurityHeaders(response, env, nonce);
       if (csrfSetCookie) secured.headers.append("set-cookie", csrfSetCookie);
+      // セッションの期限延長など、処理の途中で足された Cookie。
+      for (const cookie of extraCookies) {
+        secured.headers.append("set-cookie", cookie);
+      }
       return secured;
     } catch (error) {
       logger.error("unhandled request error", error, {
