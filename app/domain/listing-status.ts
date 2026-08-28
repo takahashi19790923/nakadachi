@@ -223,6 +223,53 @@ export function isAwaitingPayment(status: ListingStatus): boolean {
   return status === "payment_pending" || status === "payment_processing";
 }
 
+/**
+ * 掲載終了／削除の確認画面が、どの顔になるか。
+ *
+ * ★題名（<title>）と見出し（<h1>）を別々に書かない。★
+ * 以前は meta() が状態を見ずに常に「掲載を終了する」を返していたので、
+ * 下書きの削除確認で ★見出しは「投稿を削除しますか？」、タブは
+ * 「掲載を終了する」★ という食い違いが出ていた。
+ *
+ * 見た目の問題に見えるが、ここは**取り消せない操作の確認画面**で、
+ * タブ・履歴・ブックマーク・読み上げでは題名のほうが使われる。
+ * 「終了」と「削除」が入れ替わって伝わる。
+ */
+export type ClosePageMode = "close" | "delete" | "blocked";
+
+export function closePageMode(status: ListingStatus): ClosePageMode {
+  if (status === "published" || status === "expired") return "close";
+  if (status === "draft" || status === "payment_pending") return "delete";
+  /*
+   * ★決済の確認中は本人でも削除できない。★ 遷移表で許していないので、
+   * 押させると必ず失敗する。押せるのに失敗するボタンは「壊れている」としか映らない。
+   *
+   * なお closed / suspended / rejected もここへ落ちるが、遷移表では
+   * 本人の操作が一部許されている（closed→deleted など）。画面を出していない
+   * のは別の話で、管理者側は #52 で配線した。ここは題名の直しに留める。
+   */
+  return "blocked";
+}
+
+export const CLOSE_PAGE_TITLE: Readonly<Record<ClosePageMode, string>> = {
+  close: "掲載を終了する",
+  delete: "投稿を削除する",
+  blocked: "いまは削除できません",
+};
+
+export const CLOSE_PAGE_HEADING: Readonly<Record<ClosePageMode, string>> = {
+  close: "掲載を終了しますか？",
+  delete: "投稿を削除しますか？",
+  blocked: "いまは削除できません",
+};
+
+/** 押したときに送る intent。見出しと同じところから作る */
+export const CLOSE_PAGE_INTENT: Readonly<Record<ClosePageMode, string>> = {
+  close: "close",
+  delete: "delete",
+  blocked: "close",
+};
+
 /** 画面に出す日本語のラベル */
 export const LISTING_STATUS_LABEL: Readonly<Record<ListingStatus, string>> = {
   draft: "下書き",
