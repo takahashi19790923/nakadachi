@@ -17,6 +17,7 @@ import {
   flagPublishedListing,
   transitionListing,
 } from "../listing-service.server.ts";
+import { getSiteFlags, pausedError } from "../site-flags.server.ts";
 import {
   notifyListingPublished,
   notifyPaymentFailed,
@@ -61,6 +62,10 @@ export async function startListingCheckout(options: {
   userId: string;
 }): Promise<CheckoutStartResult> {
   const { db, env, logger, listingId, userId } = options;
+
+  // ★掲載の受付を止めているときは、決済にも進ませない。★
+  const flags = await getSiteFlags(db);
+  if (flags.listingsPaused) throw pausedError("listing", flags.notice);
 
   const rows = await db
     .select({

@@ -84,6 +84,7 @@ export async function writeAdminAction(
       | "report_resolve"
       | "thread_view"
       | "disclosure_view"
+      | "site_flags_change"
       | "banned_word_add"
       | "banned_word_remove";
     targetType: string;

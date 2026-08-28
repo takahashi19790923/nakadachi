@@ -78,6 +78,8 @@ export default [
     route("banned-words", "routes/admin.banned-words.tsx"),
     // 発信者情報の取り出し。引いた事実は必ず記録に残る。
     route("disclosure", "routes/admin.disclosure.tsx"),
+    // 事故のときに一部の機能だけ止めるスイッチ。
+    route("flags", "routes/admin.flags.tsx"),
   ]),
 
   // ── 機械向け ──────────────────────────────────────────────────

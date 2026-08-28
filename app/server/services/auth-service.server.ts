@@ -27,6 +27,7 @@ import {
   type UserRecord,
 } from "../repositories/user-repository.server.ts";
 import { clientIp } from "../session.server.ts";
+import { getSiteFlags, pausedError } from "./site-flags.server.ts";
 import { sendEmail } from "./email/email-service.server.ts";
 import { loginCodeEmail } from "./email/templates.server.ts";
 
@@ -271,6 +272,13 @@ async function finalize(options: {
     if (!pendingEmail) {
       throw verificationFailed("no email material to create user");
     }
+    /*
+     * ★新規登録の停止スイッチ。★ ここが「新しい人が増える」唯一の場所。
+     * 既存の利用者のログインは止めない（止めると事故のとき管理者も入れない）。
+     */
+    const flags = await getSiteFlags(db);
+    if (flags.signupsPaused) throw pausedError("signup", flags.notice);
+
     const plain = await decryptUserEmail(env, pendingEmail);
     user = await createUser(db, env, { email: plain, emailHmac });
     isNewUser = true;
