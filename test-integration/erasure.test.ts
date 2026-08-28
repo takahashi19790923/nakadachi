@@ -467,9 +467,11 @@ describe("★定期処理が入口から実際に走る★", () => {
     // 日次で回すものが全部呼ばれていること（増減したら気づけるように）。
     expect(Object.keys(result).sort()).toEqual([
       "exportDatabase",
+      "markAbandonedDraftImages",
       "markEndedImages",
       "notifyExpiring",
       "pruneBackups",
+      "purgeAbandonedDrafts",
       "purgeAccessRecords",
       "purgeAccounts",
       // 認証まわりの監査ログ（auth.* / authz.*）だけを180日で消す。

@@ -17,8 +17,10 @@ import { opsCronAlertEmail } from "./services/email/templates.server.ts";
 import { notifyExpiringListings } from "./services/notification-service.server.ts";
 import { reconcilePayments } from "./services/payment/reconcile-service.server.ts";
 import {
+  markAbandonedDraftImages,
   markEndedListingImages,
   purgeEndedListings,
+  purgeAbandonedDrafts,
   purgeOldAuthAuditLogs,
   purgeOldEmailLogs,
   purgeOldPayments,
@@ -155,12 +157,25 @@ async function runDaily(
     markEndedListingImages(db),
   );
 
+  /*
+   * ★一度も公開されなかった下書き。★ これまで誰も消していなかった。
+   * 決済まで進まなかったものは draft のまま永久に残り、写真も R2 に
+   * 残り続ける。印をつける順序は上と同じ（印 → R2 から削除 →
+   * 写真の無い掲載を削除）。
+   */
+  await runTask("markAbandonedDraftImages", logger, result, () =>
+    markAbandonedDraftImages(db),
+  );
+
   await runTask("purgeDeletedImages", logger, result, () =>
     purgeDeletedImages({ db, env, logger }),
   );
 
   await runTask("purgeEndedListings", logger, result, () =>
     purgeEndedListings(db),
+  );
+  await runTask("purgeAbandonedDrafts", logger, result, () =>
+    purgeAbandonedDrafts(db),
   );
 
   await runTask("purgeWebhookEvents", logger, result, () =>
