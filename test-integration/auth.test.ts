@@ -8,7 +8,10 @@ import {
   createSession,
   destroySession,
   getSessionUser,
+  NO_SESSION_RENEWAL,
   revokeAllSessions,
+  SESSION_ABSOLUTE_MAX_SECONDS,
+  SESSION_IDLE_SECONDS,
 } from "~/server/session.server";
 import {
   requestLoginCode,
@@ -331,20 +334,17 @@ describe("セッション", () => {
    * 片方だけ直すと「DB では切れているのにブラウザは送り続ける」
    * （またはその逆）という、原因の分かりにくい状態になる。
    */
-  it("★セッションの有効期間は90日（DBとCookieの両方）★", async () => {
-    // まず利用者を作る（ここで1つ目のセッションができる）。
+  it("★はじめの有効期間は30日（DBとCookieの両方）★", async () => {
     const { userId } = await login("session-ttl@example.test");
 
     const before = Date.now();
     const { setCookie } = await createSession({ db, env, userId, request: req() });
     const after = Date.now();
 
-    const ninetyDays = 90 * 24 * 60 * 60;
-
     // Cookie 側
     const maxAge = /Max-Age=(\d+)/.exec(setCookie)?.[1];
     expect(maxAge, "Max-Age が付いていること").toBeDefined();
-    expect(Number(maxAge)).toBe(ninetyDays);
+    expect(Number(maxAge)).toBe(SESSION_IDLE_SECONDS);
 
     // DB 側。作った瞬間からの差で見る（時刻を固定しなくても揺れない）。
     const rows = await db
@@ -352,8 +352,157 @@ describe("セッション", () => {
       .from(sessions)
       .where(eq(sessions.userId, userId));
     const newest = Math.max(...rows.map((r) => r.expiresAt.getTime()));
-    expect(newest).toBeGreaterThanOrEqual(before + ninetyDays * 1000);
-    expect(newest).toBeLessThanOrEqual(after + ninetyDays * 1000);
+    expect(newest).toBeGreaterThanOrEqual(before + SESSION_IDLE_SECONDS * 1000);
+    expect(newest).toBeLessThanOrEqual(after + SESSION_IDLE_SECONDS * 1000);
+  });
+
+  /*
+   * ★使うたびに延ばす（sliding expiration）。★
+   *
+   * このサイトは合言葉を持たないので、セッションが切れる＝ログインコードの
+   * メールが1通増える。使っているあいだ切れないようにすると、
+   * 毎日使う人の再ログインが実質ゼロになる。
+   *
+   * ★ここが効かなくなっても、画面はまったく正常に見える。★
+   * 利用者が「また入り直しになった」と気づくまで誰にも分からないので、
+   * DB・Cookie・上限・書き込み頻度をすべて検査で固定する。
+   */
+  describe("期限の延長", () => {
+    /** 指定した日数ぶん «昔にログインした» 状態を作る */
+    async function ageSession(userId: string, daysAgo: number) {
+      const created = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+      const expires = new Date(
+        created.getTime() + SESSION_IDLE_SECONDS * 1000,
+      );
+      await db
+        .update(sessions)
+        .set({ createdAt: created, expiresAt: expires })
+        .where(eq(sessions.userId, userId));
+      return { created, expires };
+    }
+
+    /** renew の呼ばれ方を記録する */
+    function spy() {
+      const cookies: string[] = [];
+      const deferred: Promise<unknown>[] = [];
+      return {
+        cookies,
+        deferred,
+        renewal: {
+          setCookie: (v: string) => void cookies.push(v),
+          defer: (p: Promise<unknown>) => void deferred.push(p),
+        },
+        async settle() {
+          await Promise.all(deferred);
+        },
+      };
+    }
+
+    it("残りが半分を切ったら、DB と Cookie の両方が延びる", async () => {
+      const { userId, cookie } = await login("slide@example.test");
+      const { expires: was } = await ageSession(userId, 20); // 残り10日
+
+      const s = spy();
+      const user = await getSessionUser({
+        getDb: () => db,
+        env,
+        renew: s.renewal,
+        request: req({ cookie }),
+      });
+      expect(user?.id).toBe(userId);
+      await s.settle();
+
+      // Cookie 側
+      expect(s.cookies).toHaveLength(1);
+      const maxAge = Number(/Max-Age=(\d+)/.exec(s.cookies[0]!)?.[1]);
+      expect(maxAge).toBe(SESSION_IDLE_SECONDS);
+
+      // DB 側。★片方だけ延びるのがいちばん困る。★
+      const [row] = await db
+        .select({ expiresAt: sessions.expiresAt })
+        .from(sessions)
+        .where(eq(sessions.userId, userId));
+      expect(row!.expiresAt.getTime()).toBeGreaterThan(was.getTime());
+    });
+
+    it("★まだ余裕があるうちは書き込まない★（読むだけの画面に書き込みを乗せない）", async () => {
+      const { userId, cookie } = await login("slide-fresh@example.test");
+      await ageSession(userId, 5); // 残り25日＝半分より多い
+
+      const s = spy();
+      await getSessionUser({
+        getDb: () => db,
+        env,
+        renew: s.renewal,
+        request: req({ cookie }),
+      });
+
+      expect(s.cookies, "Cookie を出さない").toHaveLength(0);
+      expect(s.deferred, "DB を書かない").toHaveLength(0);
+    });
+
+    it("★作られてからの上限を超えて延ばさない★", async () => {
+      const { userId, cookie } = await login("slide-cap@example.test");
+
+      // 作られてから 360日。上限（365日）まであと5日しかない。
+      const created = new Date(Date.now() - 360 * 24 * 60 * 60 * 1000);
+      await db
+        .update(sessions)
+        .set({
+          createdAt: created,
+          // 残りは1日（＝半分を切っているので延長の対象になる）
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        })
+        .where(eq(sessions.userId, userId));
+
+      const s = spy();
+      await getSessionUser({
+        getDb: () => db,
+        env,
+        renew: s.renewal,
+        request: req({ cookie }),
+      });
+      await s.settle();
+
+      const cap = created.getTime() + SESSION_ABSOLUTE_MAX_SECONDS * 1000;
+      const [row] = await db
+        .select({ expiresAt: sessions.expiresAt })
+        .from(sessions)
+        .where(eq(sessions.userId, userId));
+
+      // 30日ぶん延ばされていたら上限を突破している。
+      expect(row!.expiresAt.getTime()).toBeLessThanOrEqual(cap);
+      // Cookie も、上限までの残りに合わせて短くなっている。
+      const maxAge = Number(/Max-Age=(\d+)/.exec(s.cookies[0]!)?.[1]);
+      expect(maxAge).toBeLessThan(SESSION_IDLE_SECONDS);
+      expect(maxAge).toBeGreaterThan(0);
+    });
+
+    it("上限に達していたら、もう延ばさない（無駄な書き込みもしない）", async () => {
+      const { userId, cookie } = await login("slide-maxed@example.test");
+
+      // 作られてから 366日。上限を過ぎているが、期限はまだ1日残っている。
+      await db
+        .update(sessions)
+        .set({
+          createdAt: new Date(Date.now() - 366 * 24 * 60 * 60 * 1000),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        })
+        .where(eq(sessions.userId, userId));
+
+      const s = spy();
+      const user = await getSessionUser({
+        getDb: () => db,
+        env,
+        renew: s.renewal,
+        request: req({ cookie }),
+      });
+
+      // まだ期限内なので入れる。ただし延長はされない。
+      expect(user?.id).toBe(userId);
+      expect(s.cookies).toHaveLength(0);
+      expect(s.deferred).toHaveLength(0);
+    });
   });
 
   it("Cookie からログイン中の利用者を引ける", async () => {
@@ -361,6 +510,7 @@ describe("セッション", () => {
     const user = await getSessionUser({
       getDb: () => db,
       env,
+      renew: NO_SESSION_RENEWAL,
       request: new Request("http://localhost:5273/mypage", { headers: { cookie } }),
     });
     expect(user?.id).toBe(userId);
@@ -377,6 +527,7 @@ describe("セッション", () => {
     const user = await getSessionUser({
       getDb: () => db,
       env,
+      renew: NO_SESSION_RENEWAL,
       request: new Request("http://localhost:5273/mypage", { headers: { cookie } }),
     });
     expect(user).toBeNull();
@@ -389,6 +540,7 @@ describe("セッション", () => {
     const user = await getSessionUser({
       getDb: () => db,
       env,
+      renew: NO_SESSION_RENEWAL,
       request: new Request("http://localhost:5273/mypage", { headers: { cookie } }),
     });
     expect(user).toBeNull();
@@ -401,6 +553,7 @@ describe("セッション", () => {
     const user = await getSessionUser({
       getDb: () => db,
       env,
+      renew: NO_SESSION_RENEWAL,
       request: new Request("http://localhost:5273/mypage", { headers: { cookie } }),
     });
     expect(user).toBeNull();

@@ -8,31 +8,46 @@ import type { Db } from "./db.server.ts";
 import { isSecureOrigin, requireSecret, type AppEnv } from "./env.server.ts";
 
 /**
- * セッションの有効期間。90日（2026-08-28、30日から延長）。
+ * セッションの寿命。
  *
- * ★延ばした理由は、送信するメールの数を減らすため。★
- * このサイトは合言葉を持たない（メールでしか入れない）ので、
- * セッションが切れる＝ログインコードのメールが1通増える、という関係になる。
- * 30日だと、毎日使う人でも年に12回ログインし直すことになり、
- * 利用者が増えたときに送信事業者の枠を圧迫する。90日なら年4回。
+ * ★「使っているあいだは切れない、放置は早く切れる」を両立させる。★
+ * （2026-08-28。30日固定 → 90日固定 → この形へ）
  *
- * ★代償：端末を離れた隙に使える時間も、そのぶん延びる。★
- * 共用のパソコンでログアウトし忘れた場合、90日間そのまま入れる。
- * 受け入れているのは、
- *   - Cookie は __Host- 付き・HttpOnly・Secure・SameSite=Lax
- *   - 停止・削除された利用者は、セッションが生きていても弾く
- *     （getSessionUser が users.status を毎回見る）
- *   - 退会・ログアウトでその場で無効になる
- * という前提があるため。
+ * このサイトは合言葉を持たない。メールでしか入れないので、
+ * ★セッションが切れる ＝ ログインコードのメールが1通増える★。
+ * 一方で、期間を延ばすほど「端末を離れた隙に使える時間」も延びる。
+ * 固定の期間ではこの2つが正面からぶつかる。
  *
- * ★まだ «最後に使った日» を見ていない。★ つまり1回使ったきり放置された
- * セッションも90日生き続ける。使うたびに期限を延ばして、放置は短く切る
- * （sliding expiration）ほうが、メールの数も安全性も両方よくなる。
- * 実装していない理由は、リクエストごとに sessions を UPDATE することになり、
- * 読み取りだけのページにも書き込みが増えるため。入れるなら
- * 「期限の残りが半分を切ったときだけ延ばす」形にする。
+ *   30日固定 … 毎日使う人でも年12回ログインし直す（メールが多い）
+ *   90日固定 … 年4回。ただし1回使ったきり放置された端末も90日入れる
+ *
+ * 使うたびに期限を延ばすと、両方よくなる。
+ *
+ *   毎日使う人   … 実質ログインし直さない（メールは年1回＝下の上限のぶん）
+ *   放置された端末 … 最後に使ってから30日で切れる
+ *
+ * ★上限が要る理由。★ 延ばし続けるだけだと、盗まれた Cookie も
+ * 使われているかぎり永久に有効になる。作られてからの上限を別に置いて、
+ * どれだけ使われていても必ずいつかは切れるようにする。
  */
-const SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+/** 最後に使ってからこの期間で切れる（使うたびに延びる） */
+export const SESSION_IDLE_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * 作られてからの上限。延長し続けても、ここで必ず切れる。
+ * 1年に1回ログインし直す＝メールは利用者1人あたり年1通。
+ */
+export const SESSION_ABSOLUTE_MAX_SECONDS = 365 * 24 * 60 * 60;
+
+/**
+ * 延長する条件：残りが窓の半分を切ったとき。
+ *
+ * ★毎回 UPDATE しない。★ 読むだけの画面にも書き込みが乗ると、
+ * 閲覧のたびに DB へ書くことになる（一覧を見ているだけの人が大半なので、
+ * そこが一番効く）。半分で延ばせば、更新は15日に1回で足りる。
+ */
+const REFRESH_WHEN_REMAINING_BELOW = (SESSION_IDLE_SECONDS * 1000) / 2;
 
 export interface SessionUser {
   readonly id: string;
@@ -71,7 +86,7 @@ export async function createSession(options: {
   const sessionSecret = requireSecret(env, "SESSION_SECRET");
 
   const ip = clientIp(request);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
+  const expiresAt = new Date(Date.now() + SESSION_IDLE_SECONDS * 1000);
 
   await db.insert(sessions).values({
     id: ulid(),
@@ -90,16 +105,41 @@ export async function createSession(options: {
   return {
     setCookie: serializeCookie(env.SESSION_COOKIE_NAME, token, {
       ...cookieOptions(env),
-      maxAgeSeconds: SESSION_TTL_SECONDS,
+      maxAgeSeconds: SESSION_IDLE_SECONDS,
     }),
   };
 }
+
+/**
+ * セッションを延ばすための配線。
+ *
+ * ★どちらも必須にしてある。★ 省略可能にすると、新しい呼び出し元が
+ * 渡し忘れても型もテストも通り、★延長だけが静かに効かなくなる★
+ * （画面は正常に動くので、利用者が「また入り直しになった」と
+ * 気づくまで誰にも分からない）。渡すものが無い場面では、
+ * 「延ばさない」と明示して no-op を渡すこと。
+ */
+export interface SessionRenewal {
+  /** 延ばしたときの Set-Cookie。応答へ必ず足すこと */
+  setCookie: (value: string) => void;
+  /** 応答を返したあとに走らせる DB 更新を預ける（AppContext.defer） */
+  defer: (promise: Promise<unknown>) => void;
+}
+
+/** 延ばさない場合に渡すもの。テストや、延長が要らない経路で使う */
+export const NO_SESSION_RENEWAL: SessionRenewal = {
+  setCookie: () => undefined,
+  defer: () => undefined,
+};
 
 /**
  * Cookie からログイン中の利用者を引く。
  *
  * 停止・削除済みの利用者は「ログインしていない」として扱う。
  * 画面側で弾くだけにすると、API を直接叩かれたときに素通りする。
+ *
+ * ★ついでに期限を延ばす（sliding expiration）。★ 詳しくは
+ * ファイル冒頭の SESSION_IDLE_SECONDS のコメント。
  */
 export async function getSessionUser(options: {
   /**
@@ -112,8 +152,11 @@ export async function getSessionUser(options: {
   getDb: () => Db;
   env: AppEnv;
   request: Request;
+  renew: SessionRenewal;
+  /** テストから時刻を固定するため。既定は現在時刻 */
+  now?: Date;
 }): Promise<SessionUser | null> {
-  const { getDb, env, request } = options;
+  const { getDb, env, request, renew } = options;
   const token = readCookie(request, env.SESSION_COOKIE_NAME);
   if (!token) return null;
 
@@ -126,6 +169,7 @@ export async function getSessionUser(options: {
       role: users.role,
       status: users.status,
       expiresAt: sessions.expiresAt,
+      createdAt: sessions.createdAt,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -143,6 +187,15 @@ export async function getSessionUser(options: {
   if (!row) return null;
   if (row.status !== "active") return null;
 
+  renewSession({
+    db,
+    env,
+    token,
+    row,
+    renew,
+    now: options.now ?? new Date(),
+  });
+
   return {
     id: row.userId,
     role: row.role,
@@ -151,12 +204,56 @@ export async function getSessionUser(options: {
   };
 }
 
-/** 最終利用時刻の更新。応答をブロックしないよう waitUntil から呼ぶ */
-export async function touchSession(db: Db, sessionId: string): Promise<void> {
-  await db
-    .update(sessions)
-    .set({ lastUsedAt: new Date() })
-    .where(eq(sessions.id, sessionId));
+/**
+ * 使われたので期限を延ばす。
+ *
+ * ★DB と Cookie の両方を延ばす。★ 片方だけだと、
+ *   - DB だけ … ブラウザが先に Cookie を捨てるので、結局ログアウトする
+ *   - Cookie だけ … Cookie は送られてくるが DB 側で切れていて弾かれる
+ * どちらも「延ばしたつもりで延びていない」状態になる。
+ *
+ * 延ばすのは残りが半分を切ったときだけ。毎回 UPDATE すると、
+ * 読むだけの画面にも書き込みが乗る。
+ */
+function renewSession(options: {
+  db: Db;
+  env: AppEnv;
+  token: string;
+  row: { sessionId: string; expiresAt: Date; createdAt: Date };
+  renew: SessionRenewal;
+  now: Date;
+}): void {
+  const { db, env, token, row, renew, now } = options;
+
+  const nowMs = now.getTime();
+  const remaining = row.expiresAt.getTime() - nowMs;
+  if (remaining >= REFRESH_WHEN_REMAINING_BELOW) return;
+
+  /*
+   * ★作られてからの上限で頭を押さえる。★ ここが無いと、使われ続ける
+   * かぎり永久に有効なセッションができる（盗まれた Cookie も含めて）。
+   */
+  const hardLimit =
+    row.createdAt.getTime() + SESSION_ABSOLUTE_MAX_SECONDS * 1000;
+  const next = Math.min(nowMs + SESSION_IDLE_SECONDS * 1000, hardLimit);
+
+  // 上限に達していれば、もう延ばせない。書き込みもしない。
+  if (next <= row.expiresAt.getTime()) return;
+
+  const nextDate = new Date(next);
+  renew.defer(
+    db
+      .update(sessions)
+      .set({ expiresAt: nextDate, lastUsedAt: now, updatedAt: now })
+      .where(eq(sessions.id, row.sessionId)),
+  );
+
+  renew.setCookie(
+    serializeCookie(env.SESSION_COOKIE_NAME, token, {
+      ...cookieOptions(env),
+      maxAgeSeconds: Math.floor((next - nowMs) / 1000),
+    }),
+  );
 }
 
 /** ログアウト。DB 側でも無効にする（Cookie を消すだけでは足りない） */
