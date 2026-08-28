@@ -88,7 +88,7 @@ describe("管理ゲートの通過証", () => {
   it("資格情報が未設定なら、誰も通さない", async () => {
     const setCookie = await issueGateCookie(BASE);
     for (const key of ["ADMIN_BASIC_AUTH_USER", "ADMIN_BASIC_AUTH_PASS"]) {
-      const broken = { ...BASE, [key]: "" } as AppEnv;
+      const broken = { ...BASE, [key]: "" };
       expect(await hasValidGate(withCookie(setCookie), broken), key).toBe(false);
     }
   });
