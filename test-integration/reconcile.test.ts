@@ -62,6 +62,37 @@ async function makePaidPayment(listingId: string, minutesAgo: number) {
   return paymentId;
 }
 
+/**
+ * 未入金の決済を作る。minutesAgo 分前に Session を作ったことにする。
+ *
+ * ★created_at をずらすのは raw SQL で行う。★ drizzle の insert には
+ * defaultNow() が効くので、値を渡しても列の既定に上書きされる。
+ */
+async function makeUnpaidPayment(
+  listingId: string,
+  options: {
+    status: "created" | "pending" | "expired" | "failed";
+    minutesAgo: number;
+  },
+) {
+  const paymentId = ulid();
+  await db.insert(payments).values({
+    id: paymentId,
+    listingId,
+    userId,
+    provider: "stripe",
+    checkoutSessionId: `cs_test_${paymentId}`,
+    amountJpy: LISTING_FEE_JPY,
+    currency: "jpy",
+    status: options.status,
+  });
+  await db.execute(sql`
+    update payments set created_at = now() - make_interval(mins => ${options.minutesAgo})
+    where id = ${paymentId}
+  `);
+  return paymentId;
+}
+
 describe("★払ったのに掲載が出ていないことを見つける★", () => {
   it("成立から1時間を過ぎて未公開なら見つける", async () => {
     const listingId = await makeDraft(db, userId, { status: "draft" });
@@ -96,20 +127,106 @@ describe("★払ったのに掲載が出ていないことを見つける★", (
     expect(await findPaymentAnomalies(db)).toHaveLength(0);
   });
 
-  it("未払いの決済は対象外", async () => {
+  it("作りたての未払いは対象外（まだ決済の途中）", async () => {
     const listingId = await makeDraft(db, userId, { status: "draft" });
-    await db.insert(payments).values({
-      id: ulid(),
-      listingId,
-      userId,
-      provider: "stripe",
-      checkoutSessionId: `cs_test_${ulid()}`,
-      amountJpy: LISTING_FEE_JPY,
-      currency: "jpy",
-      status: "created",
-    });
+    await makeUnpaidPayment(listingId, { status: "created", minutesAgo: 0 });
 
     expect(await findPaymentAnomalies(db)).toHaveLength(0);
+  });
+});
+
+/**
+ * ★Webhook が1件も届かないことを見つける★
+ *
+ * 2026-08-29、preview のサンドボックスに送信先を作っていなかったため、
+ * 決済しても投稿が payment_pending から動かなかった。
+ * ★どの警報も鳴らなかった。★ 失敗した通知も、止まった通知も無い
+ * ——通知が1件も無いのだから、行を数える検査には掛かりようがない。
+ *
+ * 本番で同じことが起きれば「お金は取られたが掲載は出ず、誰も気づかない」。
+ */
+describe("★Stripe からの通知が1件も届いていないことを見つける★", () => {
+  it("Session の期限＋猶予を過ぎて created のままなら見つける", async () => {
+    const listingId = await makeDraft(db, userId, { status: "payment_pending" });
+    const paymentId = await makeUnpaidPayment(listingId, {
+      status: "created",
+      minutesAgo: 120, // 期限60分 + 猶予30分 を超えている
+    });
+
+    const found = await findPaymentAnomalies(db);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.kind).toBe("webhook_never_arrived");
+    expect(found[0]!.paymentId).toBe(paymentId);
+  });
+
+  it("★期限内なら見つけない（放置された決済は正常にありうる）★", async () => {
+    // ここで鳴ると、買うのをやめた人のぶんだけ毎時メールが出る。
+    const listingId = await makeDraft(db, userId, { status: "payment_pending" });
+    await makeUnpaidPayment(listingId, { status: "created", minutesAgo: 45 });
+
+    expect(await findPaymentAnomalies(db)).toHaveLength(0);
+  });
+
+  it("★expired なら異常ではない（失効の通知は届いている）★", async () => {
+    /*
+     * 判定の根拠がここ。Stripe は期限が来れば必ず expired を送る。
+     * 受け取れていれば status は expired になる。created のままという
+     * ことは、成立も失効も届いていないということ。
+     */
+    const listingId = await makeDraft(db, userId, { status: "draft" });
+    await makeUnpaidPayment(listingId, { status: "expired", minutesAgo: 300 });
+
+    expect(await findPaymentAnomalies(db)).toHaveLength(0);
+  });
+
+  it("★pending は対象外（後払いの入金待ちは数日かかる）★", async () => {
+    // pending は「completed は届いたが入金がまだ」。通知の経路は生きている。
+    const listingId = await makeDraft(db, userId, {
+      status: "payment_processing",
+    });
+    await makeUnpaidPayment(listingId, { status: "pending", minutesAgo: 4320 });
+
+    expect(await findPaymentAnomalies(db)).toHaveLength(0);
+  });
+
+  it("failed も対象外（失敗の通知は届いている）", async () => {
+    const listingId = await makeDraft(db, userId, { status: "draft" });
+    await makeUnpaidPayment(listingId, { status: "failed", minutesAgo: 300 });
+
+    expect(await findPaymentAnomalies(db)).toHaveLength(0);
+  });
+
+  it("★投稿が消えていても見つける★", async () => {
+    /*
+     * 決済記録は退会しても残る（listing_id は ON DELETE SET NULL）。
+     * inner join にすると、痕跡がいちばん残っていない決済だけが漏れる。
+     */
+    const listingId = await makeDraft(db, userId, { status: "payment_pending" });
+    await makeUnpaidPayment(listingId, { status: "created", minutesAgo: 120 });
+    // 退会処理が実際に行うこと（参照だけ外し、決済記録は残す）
+    await db.execute(sql`update payments set listing_id = null`);
+
+    const found = await findPaymentAnomalies(db);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.kind).toBe("webhook_never_arrived");
+    expect(found[0]!.listingId).toBeNull();
+    // 件名に "undefined" や空欄が出ないこと
+    expect(found[0]!.listingTitle).toContain("投稿は残っていません");
+  });
+
+  it("見つけたら運営者へメールが出る（1件につき1回）", async () => {
+    const listingId = await makeDraft(db, userId, { status: "payment_pending" });
+    await makeUnpaidPayment(listingId, { status: "created", minutesAgo: 120 });
+
+    expect(await reconcilePayments({ db, env, logger: testLogger })).toBe(1);
+    expect(await reconcilePayments({ db, env, logger: testLogger })).toBe(1);
+
+    const sent = await db
+      .select({ key: emailDeliveryLogs.idempotencyKey })
+      .from(emailDeliveryLogs)
+      .where(eq(emailDeliveryLogs.template, "ops_payment_alert"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.key).toMatch(/^ops_payment_alert:webhook_never_arrived:/);
   });
 });
 
