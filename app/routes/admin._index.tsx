@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 
-import { LISTING_STATUS_LABEL, type ListingStatus } from "~/domain/listing-status";
+import { ADMIN_STATUS_TILES, LISTING_STATUS_LABEL } from "~/domain/listing-status";
 import { privatePageMeta } from "~/domain/seo";
 import { requireAdminGate } from "~/server/guards.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
@@ -129,17 +129,7 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
       <section className="mt-6">
         <h2 className="text-lg font-bold">投稿の状態</h2>
         <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {(
-            [
-              "draft",
-              "payment_pending",
-              "published",
-              "closed",
-              "expired",
-              "suspended",
-              "rejected",
-            ] as ListingStatus[]
-          ).map((status) => (
+          {ADMIN_STATUS_TILES.map((status) => (
             <div key={status} className="card p-4 text-center">
               <dt className="text-xs text-washi-600">
                 {LISTING_STATUS_LABEL[status]}
