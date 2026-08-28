@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
@@ -128,8 +129,22 @@ if (only) {
   }
 }
 
+/**
+ * 実際には投入しない練習用の指定。
+ *
+ * ★これが無かったせいで、入力の見え方を «実物で» 試して
+ * preview の STRIPE_SECRET_KEY を偽の値で上書きした（2026-08-29）。★
+ * 秘密を投入する道具に「試しに動かす」手段が無いと、試すこと自体が
+ * 事故になる。--dry-run なら wrangler を呼ばない。
+ */
+const dryRun = args.includes("--dry-run");
+
 /** wrangler へ値を渡す。改行を足さない */
 function putSecret(name, value) {
+  if (dryRun) {
+    console.log(`  （--dry-run のため投入しません）`);
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       "pnpm",
@@ -179,19 +194,61 @@ async function verifyTurnstileSecret(value) {
   }
 }
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
+/**
+ * 入力した値を画面に出さない。
+ *
+ * ★以前は «値は画面に表示されますが、コマンド履歴には残りません» と
+ * 断って、そのまま表示していた。★ 履歴だけが問題ではない ——
+ * 端末のスクロールバック、tmux や screen のバッファ、エディタの
+ * 端末ペイン（保存されることがある）、画面共有、録画。
+ * 本番の DB のパスワードや暗号化鍵が、そのどれにも平文で残る。
+ *
+ * 質問中だけ出力を飲み込み、打った文字は * で置き換える。
+ * 貼り付け（複数文字が一度に来る）でも動く。
+ */
+function createHiddenInterface() {
+  let hiding = false;
+  const out = new Writable({
+    write(chunk, _encoding, callback) {
+      if (!hiding) process.stdout.write(chunk);
+      callback();
+    },
+  });
+
+  const rl = createInterface({ input: process.stdin, output: out, terminal: true });
+
+  return {
+    close: () => rl.close(),
+    /** 画面に出さずに1行受け取る */
+    async secret(prompt) {
+      process.stdout.write(prompt);
+      hiding = true;
+      try {
+        const answer = await rl.question("");
+        process.stdout.write("\n");
+        return answer;
+      } finally {
+        hiding = false;
+      }
+    },
+    /** 画面に出してよい質問（確認など） */
+    question: (prompt) => rl.question(prompt),
+  };
+}
+
+const rl = createHiddenInterface();
 
 const items = only ? SECRETS.filter((s) => only.includes(s.name)) : SECRETS;
 
-console.log(`環境: ${targetEnv}`);
+console.log(`環境: ${targetEnv}${dryRun ? "（--dry-run：投入しません）" : ""}`);
 console.log(`対象: ${items.length}項目${only ? "（--only で絞り込み）" : ""}`);
 console.log("空のまま Enter を押すと、その項目は飛ばします。");
-console.log("★値は画面に表示されますが、コマンド履歴には残りません。★\n");
+console.log("★入力した値は画面に表示されません。★ 貼り付けても大丈夫です。\n");
 
 for (const secret of items) {
   let value;
   for (;;) {
-    value = (await rl.question(`${secret.name}（${secret.hint}）: `)).trim();
+    value = (await rl.secret(`${secret.name}（${secret.hint}）: `)).trim();
     if (value === "") break;
 
     // ★形が違うものは入り口で止める。★ 1つずれて別の秘密を貼る事故を防ぐ。

@@ -87,6 +87,8 @@ export default [
   route("sitemap.xml", "routes/sitemap[.]xml.tsx"),
   route("api/stripe/webhook", "routes/api.stripe.webhook.tsx"),
   route("api/config", "routes/api.config.tsx"),
+  // CSP 違反の受け口。誰でも叩ける前提で、DB には書かない。
+  route("api/csp-report", "routes/api.csp-report.tsx"),
 
   // 上のどれにも当たらないパスは 404 にする。
   // ★SPA フォールバックで全パスに 200 を返さない。★ 404 が機能しなくなる。
