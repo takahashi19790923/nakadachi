@@ -11,7 +11,11 @@ import {
 import { ulid } from "~/domain/ulid.ts";
 import type { Db } from "../db.server.ts";
 import { AppError, notFound } from "../errors.ts";
-import { findBlockingWord } from "../repositories/moderation-repository.server.ts";
+import {
+  createSystemReport,
+  findBlockingWord,
+  findFlaggedWords,
+} from "../repositories/moderation-repository.server.ts";
 
 /**
  * サイト内メッセージ。
@@ -286,6 +290,19 @@ export async function sendMessage(options: {
     );
   }
 
+  /*
+   * ★severity=flag の語。★ 送信は通すが、管理者の確認待ちに入れる。
+   *
+   * 2026-08-28 まで findFlaggedWords はどこからも呼ばれておらず、
+   * ★flag として登録された語は検知しても何も起きなかった★
+   * （本番に6件あった）。管理者は「登録したから見張られている」と
+   * 思っているのに、実際には素通りしていた。
+   *
+   * 語そのものは detail に書かない。通報一覧は本文を持たない画面で、
+   * そこに禁止語を並べると、対応する人の目に不快な語だけが集まる。
+   */
+  const flagged = await findFlaggedWords(db, body);
+
   // 相手がこちらをブロックしていれば送れない。
   const counterpart = await db
     .select({ userId: conversationParticipants.userId })
@@ -342,6 +359,19 @@ export async function sendMessage(options: {
         ),
       );
   });
+
+  /*
+   * ★メッセージを保存してから通報を作る。★ 先に作ると、保存に失敗した
+   * ときに存在しないメッセージを指す通報が残る（外部キーで落ちる）。
+   * 通報の作成に失敗しても送信そのものは成立させる（記録はログに残る）。
+   */
+  if (flagged.length > 0) {
+    await createSystemReport(db, {
+      target: { type: "message", id: messageId },
+      reason: "other",
+      detail: `自動検知：要確認の語を ${flagged.length} 件含みます`,
+    });
+  }
 
   return { messageId };
 }

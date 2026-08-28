@@ -148,6 +148,57 @@ export async function createReport(
   return { created: (result.rowCount ?? 0) > 0 };
 }
 
+/**
+ * システムが自動で検知したものを、管理者の確認待ちに入れる。
+ *
+ * ★人間の通報者はいないので reporter_id は null。★ 誰かの ID を
+ * 入れると「その人が通報した」という嘘が監査の記録に残る。
+ *
+ * ★未対応のものが既にあれば増やさない。★ ただし対応済み
+ * （actioned / dismissed）のあとで同じことが再発したら、新しく作る。
+ * 一意索引で恒久的に塞ぐと、一度対応した相手は二度と検知されなくなる。
+ *
+ * 判定と挿入を1文にしてある。分けて書くと、同時に2回走ったときに
+ * 両方が「まだ無い」と判断して2行できる。
+ */
+export async function createSystemReport(
+  db: Db,
+  options: {
+    target: ReportTarget;
+    reason: string;
+    detail: string;
+  },
+): Promise<{ created: boolean }> {
+  const { target } = options;
+  const listingId = target.type === "listing" ? target.id : null;
+  const messageId = target.type === "message" ? target.id : null;
+  const userId = target.type === "user" ? target.id : null;
+
+  const result = await db.execute(sql`
+    insert into reports (
+      id, reporter_id, target_type,
+      target_listing_id, target_message_id, target_user_id,
+      reason, detail, status
+    )
+    select ${ulid()}, null, ${target.type},
+           ${listingId}, ${messageId}, ${userId},
+           ${options.reason}::report_reason, ${options.detail || null}, 'open'
+    where not exists (
+      select 1 from reports r
+      where r.reporter_id is null
+        and r.status in ('open', 'reviewing')
+        and r.target_type = ${target.type}
+        and (
+             (${listingId}::text is not null and r.target_listing_id = ${listingId})
+          or (${messageId}::text is not null and r.target_message_id = ${messageId})
+          or (${userId}::text    is not null and r.target_user_id    = ${userId})
+        )
+    )
+  `);
+
+  return { created: (result.rowCount ?? 0) > 0 };
+}
+
 export async function listReportsByReporter(db: Db, reporterId: string) {
   return db
     .select({

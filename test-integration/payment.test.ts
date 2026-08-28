@@ -836,8 +836,16 @@ describe("★決済の応答に通知メールを待たせない★", () => {
     expect(await statusOf(listingId)).toBe("published");
     expect(await paymentStatus()).toBe("succeeded");
 
-    // ★通知は応答の外に出ている。★ 0件なら待ってしまっている。
-    expect(deferred).toHaveLength(1);
+    /*
+     * ★通知は応答の外に出ている。★ 0件なら待ってしまっている。
+     *
+     * 件数は決め打ちにしない。以前は「ちょうど1件」と書いていたが、
+     * 応答の外へ回す処理が1つ増えただけで落ちた（2026-08-28、
+     * 要確認ワードの検知を足したとき）。★確かめたいのは «待っていない»
+     * ことであって、預けた数ではない。★ 数を固定すると、本物の退行と
+     * 「また増えたのか」の区別がつかなくなる。
+     */
+    expect(deferred.length).toBeGreaterThan(0);
 
     // 預けたぶんは最後まで走りきる（接続を畳む前に片づける前提）。
     await Promise.allSettled(deferred);
