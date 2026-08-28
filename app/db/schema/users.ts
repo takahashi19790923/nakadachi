@@ -38,6 +38,22 @@ export const users = pgTable(
     id: ulidPk(),
     emailEncrypted: text("email_encrypted").notNull(),
     emailHmac: varchar("email_hmac", { length: 64 }).notNull(),
+    /**
+     * 「同じ受信箱に届くか」で見たときの索引。
+     *
+     * ★本人確認には使わない。★ emailHmac が本人。こちらは
+     *   - 利用停止にした相手の再登録を止める
+     *   - アドレス単位の回数を、記号を足して回避させない
+     * ためだけに使う（crypto.server.ts の canonicalEmail）。
+     *
+     * a@gmail.com / a+1@gmail.com / a.@gmail.com は同じ受信箱に届く。
+     * 小文字化だけでは、★停止した相手が点をひとつ足して再登録できた★。
+     *
+     * 一意にはしない。用途が「同一視して数える」であって
+     * 「同一人物と断定する」ではないため。断定に使うと、正規化を
+     * 間違えたときに他人のアカウントへ入れる事故になる。
+     */
+    emailCanonicalHmac: varchar("email_canonical_hmac", { length: 64 }),
     role: userRoleEnum("role").notNull().default("user"),
     status: userStatusEnum("status").notNull().default("active"),
     /** 停止の理由。利用者本人にはそのまま見せない（内部向け） */
@@ -49,6 +65,7 @@ export const users = pgTable(
   },
   (t) => [
     uniqueIndex("users_email_hmac_key").on(t.emailHmac),
+    index("users_email_canonical_idx").on(t.emailCanonicalHmac),
     index("users_role_idx").on(t.role),
     index("users_status_idx").on(t.status),
   ],

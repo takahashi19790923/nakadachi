@@ -176,6 +176,64 @@ export function normalizeEmail(email: string): string {
 }
 
 /**
+ * 「同じ受信箱に届くか」で見たときのアドレス。
+ *
+ * ★本人確認（誰のアカウントか）には使わない。★ そちらは normalizeEmail の
+ * ままで、大文字小文字だけを吸収する。ここで作るのは
+ * **「回数を数える」「停止を回避させない」ための鍵**。
+ *
+ * 何が問題だったか：
+ *   `a@gmail.com` `a+1@gmail.com` `a.@gmail.com` はすべて同じ受信箱に届く。
+ *   正規化が小文字化だけだと、
+ *     - アドレス単位のレート制限を、記号を足すだけで何度でもすり抜けられる
+ *     - ★利用停止にした相手が、点をひとつ足して再登録できる★
+ *   後者は詐欺の対応で効いてくる。
+ *
+ * ★分けている理由。★ 本人確認まで一緒にすると、正規化を間違えたときに
+ * 「他人のアカウントに入れる」まで一気に行く。こちらは間違えても
+ * 「回数の数え方が厳しすぎる」で済む。壊れ方の重さが桁違いなので混ぜない。
+ *
+ * 規則（控えめに寄せてある）:
+ *   - すべて: 前後の空白を落とし、小文字にし、`+` 以降を落とす
+ *   - gmail.com / googlemail.com: ローカル部の `.` を落とし、
+ *     ドメインを gmail.com に寄せる
+ *
+ * `+` の扱いを全ドメインに広げているのは、対応していない事業者が
+ * ほとんど無いため。`.` は gmail 系にしか適用しない —— 他の事業者では
+ * 点の有無で別人になりうるので、無関係な人を巻き込む。
+ */
+export function canonicalEmail(email: string): string {
+  const normalized = normalizeEmail(email);
+  const at = normalized.lastIndexOf("@");
+  if (at <= 0) return normalized;
+
+  let local = normalized.slice(0, at);
+  let domain = normalized.slice(at + 1);
+
+  const plus = local.indexOf("+");
+  if (plus >= 0) local = local.slice(0, plus);
+
+  if (domain === "googlemail.com") domain = "gmail.com";
+  if (domain === "gmail.com") local = local.split(".").join("");
+
+  // 記号だけのローカル部（"+tag@..." など）は潰さない。元に戻す。
+  if (local === "") local = normalized.slice(0, at);
+
+  return `${local}@${domain}`;
+}
+
+/**
+ * 「同じ受信箱か」を見るための索引。
+ * 用途は回数の数え上げと停止の回避防止だけ（本人確認には使わない）。
+ */
+export async function emailCanonicalHmac(
+  indexKey: string,
+  email: string,
+): Promise<string> {
+  return hmacSha256Hex(indexKey, `canonical:${canonicalEmail(email)}`);
+}
+
+/**
  * IP アドレスのハッシュ。
  *
  * 生の IP を保存しない。レート制限と不正利用の追跡に足りる粒度だけを残す。

@@ -4,6 +4,7 @@ import { emailVerificationTokens } from "~/db/schema/index.ts";
 import { ulid } from "~/domain/ulid.ts";
 import { writeAuditLog } from "../audit.server.ts";
 import {
+  emailCanonicalHmac,
   emailIndexHmac,
   encryptString,
   generateOtp,
@@ -22,6 +23,7 @@ import {
   createUser,
   decryptUserEmail,
   findUserByEmailHmac,
+  hasSuspendedAccountForInbox,
   type UserRecord,
 } from "../repositories/user-repository.server.ts";
 import { clientIp } from "../session.server.ts";
@@ -68,6 +70,12 @@ export async function requestLoginCode(options: {
   const indexKey = requireSecret(env, "EMAIL_INDEX_KEY");
   const sessionSecret = requireSecret(env, "SESSION_SECRET");
   const emailHmac = await emailIndexHmac(indexKey, email);
+  /*
+   * ★回数と停止は「同じ受信箱か」で見る。★ 本人確認は emailHmac のまま。
+   * a@gmail.com / a+1@gmail.com / a.@gmail.com は同じ箱に届くので、
+   * 小文字化だけだと記号を足すだけで制限も停止も回避できた。
+   */
+  const canonicalHmac = await emailCanonicalHmac(indexKey, email);
 
   /*
    * ★短い窓と1日の総量を両方見る。★ 10分10回だけだと、待てば1日1,440通に
@@ -82,11 +90,24 @@ export async function requestLoginCode(options: {
     await enforceRateLimit(db, "authRequestByIpDaily", ipHash);
   }
   // アドレス単位でも絞る。他人のアドレスへ大量に送りつける嫌がらせを防ぐ。
-  await enforceRateLimit(db, "authRequestByEmail", emailHmac);
-  await enforceRateLimit(db, "authRequestByEmailDaily", emailHmac);
+  // ★受信箱単位で数える。★ 記号を足して別枠にされないように。
+  await enforceRateLimit(db, "authRequestByEmail", canonicalHmac);
+  await enforceRateLimit(db, "authRequestByEmailDaily", canonicalHmac);
 
   const existing = await findUserByEmailHmac(db, emailHmac);
-  if (existing && existing.status === "suspended") {
+
+  /*
+   * ★停止の判定は「同じ受信箱」まで広げる。★
+   *
+   * 以前はこのアドレスちょうどの行しか見ていなかったので、
+   * ★詐欺で止めた相手が taro@gmail.com → t.aro@gmail.com と
+   * 点をひとつ足すだけで再登録できた★（2026-08-25 の公開前監査で指摘）。
+   * 止めた側からは成功に見えるので、気づく方法が無い。
+   */
+  const suspended =
+    (existing && existing.status === "suspended") ||
+    (await hasSuspendedAccountForInbox(db, canonicalHmac));
+  if (suspended) {
     // 停止中でも同じ応答を返す。ここで差を出すと停止の有無が漏れる。
     logger.warn("login requested for suspended account");
     return { accepted: true };
