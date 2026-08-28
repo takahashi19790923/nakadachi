@@ -16,8 +16,13 @@ import { ulid } from "~/domain/ulid.ts";
 import type { ListingInput } from "~/domain/validation/listing";
 import type { Db } from "../db.server.ts";
 import { AppError, notFound } from "../errors.ts";
+import type { Logger } from "../logger.server.ts";
 import { isValidAreaPair } from "../repositories/location-repository.server.ts";
-import { findBlockingWord } from "../repositories/moderation-repository.server.ts";
+import {
+  createSystemReport,
+  findBlockingWord,
+  findFlaggedWords,
+} from "../repositories/moderation-repository.server.ts";
 
 /**
  * 投稿のサービス層。
@@ -372,4 +377,52 @@ export async function countListingsByStatus(
 /** そのカテゴリの定義。画面が選択肢を出すために使う */
 export function categoryDefinition(slug: keyof typeof CATEGORIES) {
   return CATEGORIES[slug];
+}
+
+/**
+ * 公開された掲載に、要確認の語（severity=flag）が無いかを見る。
+ *
+ * 見つかれば、システム発の通報として管理者の確認待ちに入れる。
+ * ★公開そのものは止めない。★ flag は「通したうえで確認する」ための印で、
+ * 止めたいものは severity=block にする（あちらは保存時に弾く）。
+ *
+ * 2026-08-28 まで findFlaggedWords はどこからも呼ばれておらず、
+ * ★flag として登録された語は検知しても何も起きていなかった★
+ * （本番に6件あった）。
+ *
+ * ★ここが失敗しても呼び出し元を巻き戻さない。★ 決済は成立していて
+ * 掲載も出ている。通報を作れなかったことはログに残す。
+ */
+export async function flagPublishedListing(options: {
+  db: Db;
+  logger: Logger;
+  listingId: string;
+}): Promise<void> {
+  const { db, logger, listingId } = options;
+  try {
+    const rows = await db
+      .select({ title: listings.title, body: listings.body })
+      .from(listings)
+      .where(eq(listings.id, listingId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return;
+
+    const flagged = await findFlaggedWords(db, `${row.title}\n${row.body}`);
+    if (flagged.length === 0) return;
+
+    /*
+     * 語そのものは detail に書かない。通報一覧は本文を持たない画面なので、
+     * そこに禁止語だけが並ぶと、対応する人の目に不快な語が集まる。
+     * 件数だけ知らせて、中身は掲載を開いて見てもらう。
+     */
+    const { created } = await createSystemReport(db, {
+      target: { type: "listing", id: listingId },
+      reason: "other",
+      detail: `自動検知：要確認の語を ${flagged.length} 件含みます`,
+    });
+    logger.info("listing flagged for review", { listingId, created });
+  } catch (error) {
+    logger.error("flagging published listing failed", error, { listingId });
+  }
 }

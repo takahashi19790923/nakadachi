@@ -32,9 +32,19 @@ export const reports = pgTable(
   "reports",
   {
     id: ulidPk(),
-    reporterId: ulidRef("reporter_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    /**
+     * 通報した利用者。
+     *
+     * ★null は「システムが自動で検知した」という意味。★
+     * 禁止ワード（severity=flag）を含む投稿・メッセージは、通さずに
+     * 止めるのではなく、通したうえで管理者の確認待ちに入れる。
+     * そのときに人間の通報者はいない。無理に誰かの ID を入れると、
+     * ★監査の記録が «その人が通報した» という嘘になる。★
+     * （2026-08-28。それまで flag は検知しても何も起きていなかった）
+     */
+    reporterId: ulidRef("reporter_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     targetType: reportTargetTypeEnum("target_type").notNull(),
     targetListingId: ulidRef("target_listing_id").references(() => listings.id, {
       onDelete: "cascade",

@@ -13,7 +13,10 @@ import type { Db } from "../../db.server.ts";
 import { requireSecret, type AppEnv } from "../../env.server.ts";
 import { AppError, notFound } from "../../errors.ts";
 import type { Logger } from "../../logger.server.ts";
-import { transitionListing } from "../listing-service.server.ts";
+import {
+  flagPublishedListing,
+  transitionListing,
+} from "../listing-service.server.ts";
 import {
   notifyListingPublished,
   notifyPaymentFailed,
@@ -614,6 +617,25 @@ async function handleSessionSucceeded(options: {
     targetId: payment.listingId,
     metadata: { amountJpy: LISTING_FEE_JPY },
   });
+
+  /*
+   * ★要確認の語（severity=flag）を含む掲載を、管理者の確認待ちに入れる。★
+   *
+   * 2026-08-28 まで findFlaggedWords はどこからも呼ばれておらず、
+   * ★flag として登録された語は検知しても何も起きなかった★
+   * （本番に6件あった）。登録した側は「見張られている」と思っていた。
+   *
+   * ★公開された時点で作る。★ 下書きの段階では作らない。管理者は
+   * 他人の下書きを見られない（assertOwner は管理者も通さない）ので、
+   * 見られないものを指す通報を作っても行き止まりになる。
+   *
+   * 公開そのものは止めない。flag は「通したうえで確認する」ための印。
+   * ★ここが失敗しても決済と公開は巻き戻さない。★ お金は受け取っていて
+   * 掲載も出ている。通報が作れなかったことはログに残す。
+   */
+  await afterResponse(options.defer, () =>
+    flagPublishedListing({ db, logger, listingId: payment.listingId }),
+  );
 
   // ★メールの失敗で公開を巻き戻さない。★ 冪等キーがあるので、あとから
   // 同じ鍵で再送しても二重には届かない。応答の外へ出す（afterResponse）。
