@@ -39,6 +39,7 @@
     "db:harden": "node --experimental-strip-types scripts/harden-db.ts",
     "db:restore": "node --experimental-strip-types scripts/restore.ts",
     "db:drill": "node --experimental-strip-types scripts/restore-drill.ts",
+    "db:backfill-canonical": "node --experimental-strip-types scripts/backfill-canonical-email.ts",
     "sbom": "pnpm dlx @cyclonedx/cyclonedx-npm@latest --omit dev --output-file docs/sbom.json"
   },
   "dependencies": {
