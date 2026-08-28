@@ -318,6 +318,44 @@ describe("セッション", () => {
     expect(rows[0]!.tokenHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  /*
+   * ★有効期間は «安全と、送るメールの数» の綱引きになっている。★
+   *
+   * このサイトは合言葉を持たない（メールでしか入れない）ので、
+   * セッションが切れる ＝ ログインコードのメールが1通増える。
+   * 2026-08-28 に 30日 → 90日 へ延ばした（Resend の枠を圧迫しないため）。
+   *
+   * 代わりに、端末を離れた隙に使える時間も90日になる。
+   * ★どちらへ動かすときも、意識して動かすこと。★ 気づかずに変わるのを
+   * 防ぐために、行の値と Cookie の maxAge の両方をここで固定する。
+   * 片方だけ直すと「DB では切れているのにブラウザは送り続ける」
+   * （またはその逆）という、原因の分かりにくい状態になる。
+   */
+  it("★セッションの有効期間は90日（DBとCookieの両方）★", async () => {
+    // まず利用者を作る（ここで1つ目のセッションができる）。
+    const { userId } = await login("session-ttl@example.test");
+
+    const before = Date.now();
+    const { setCookie } = await createSession({ db, env, userId, request: req() });
+    const after = Date.now();
+
+    const ninetyDays = 90 * 24 * 60 * 60;
+
+    // Cookie 側
+    const maxAge = /Max-Age=(\d+)/.exec(setCookie)?.[1];
+    expect(maxAge, "Max-Age が付いていること").toBeDefined();
+    expect(Number(maxAge)).toBe(ninetyDays);
+
+    // DB 側。作った瞬間からの差で見る（時刻を固定しなくても揺れない）。
+    const rows = await db
+      .select({ expiresAt: sessions.expiresAt })
+      .from(sessions)
+      .where(eq(sessions.userId, userId));
+    const newest = Math.max(...rows.map((r) => r.expiresAt.getTime()));
+    expect(newest).toBeGreaterThanOrEqual(before + ninetyDays * 1000);
+    expect(newest).toBeLessThanOrEqual(after + ninetyDays * 1000);
+  });
+
   it("Cookie からログイン中の利用者を引ける", async () => {
     const { userId, cookie } = await login("session2@example.test");
     const user = await getSessionUser({
