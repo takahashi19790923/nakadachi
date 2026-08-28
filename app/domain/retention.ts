@@ -52,6 +52,21 @@ export const PAYMENT_RETENTION_DAYS = 365 * 7;
 export const AUTH_AUDIT_RETENTION_DAYS = 180;
 
 /**
+ * 一度も公開されなかった下書き。
+ *
+ * ★これまで誰も消していなかった。★ 掲載は「下書き → 決済 → 公開」で、
+ * 決済まで進まなかったものは draft のまま永久に残る。写真も R2 に
+ * 残り続ける（1枚あたりの上限が大きいので、ここがいちばん費用に効く）。
+ * 期限切れの掃除は「終わった掲載」（closed / expired / rejected …）
+ * しか見ておらず、draft は「終わっていない」ので対象外だった。
+ *
+ * 180日。書きかけを保存したまま数か月あとに戻ってくる人がいるので、
+ * 短くしすぎない。★公開されたことのあるものは対象にしない★
+ * （published_at が入っていれば、いまが draft でも別の話）。
+ */
+export const ABANDONED_DRAFT_RETENTION_DAYS = 180;
+
+/**
  * 終わった掲載とみなす状態。
  *
  * ★suspended は入れない。★ 返金・チャージバック・管理者の停止で止めた

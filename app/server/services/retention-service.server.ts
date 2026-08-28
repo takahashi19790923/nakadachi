@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import {
+  ABANDONED_DRAFT_RETENTION_DAYS,
   AUTH_AUDIT_RETENTION_DAYS,
   EMAIL_LOG_RETENTION_DAYS,
   ENDED_LISTING_STATUSES,
@@ -156,6 +157,83 @@ export async function purgeOldAuthAuditLogs(db: Db): Promise<number> {
     delete from audit_logs
     where (action like 'auth.%' or action like 'authz.%')
       and created_at <= now() - make_interval(days => ${AUTH_AUDIT_RETENTION_DAYS})
+  `);
+  return result.rowCount ?? 0;
+}
+
+/**
+ * 一度も公開されなかった下書きに、画像の削除待ちの印をつける。
+ *
+ * ★これまで誰も消していなかった。★ 掲載は「下書き → 決済 → 公開」で、
+ * 決済まで進まなかったものは draft のまま永久に残る。写真も R2 に
+ * 残り続けるので、ここがいちばん費用に効く。
+ * 期限切れの掃除は「終わった掲載」しか見ておらず、draft は
+ * 「終わっていない」ので対象外だった。
+ *
+ * ★公開されたことのあるものは触らない。★ published_at が入っていれば、
+ * いまが draft でも「一度は世に出たもの」で、別の保持期間の話になる。
+ * ★決済が動いているものも触らない。★ 払ったのに消えた、を作らない。
+ *
+ * 実体の削除は既存の purgeDeletedImages が行う（印 → R2 から削除 →
+ * 写真の無い掲載を削除、の順序は変えない）。
+ */
+export async function markAbandonedDraftImages(
+  db: Db,
+  limit = 500,
+): Promise<number> {
+  const result = await db.execute(sql`
+    update listing_images
+    set purge_after = now()
+    where purge_after is null
+      and listing_id in (
+        select l.id
+        from listings as l
+        where l.status = 'draft'
+          and l.published_at is null
+          and l.updated_at
+              <= now() - make_interval(days => ${ABANDONED_DRAFT_RETENTION_DAYS})
+          and not exists (
+            select 1 from payments as p
+            where p.listing_id = l.id
+              and p.status in ('created', 'pending', 'succeeded')
+          )
+        limit ${limit}
+      )
+  `);
+  return result.rowCount ?? 0;
+}
+
+/**
+ * 写真の無くなった「放置された下書き」を消す。
+ *
+ * markAbandonedDraftImages と同じ条件に、
+ * 「写真が1枚も残っていないこと」を足す。★印をつけて R2 から実体を
+ * 消すまでの間は消さない★（行だけ消えて実体が残ると、どこからも
+ * 参照されない課金対象が永久に残る）。
+ */
+export async function purgeAbandonedDrafts(
+  db: Db,
+  limit = 200,
+): Promise<number> {
+  const result = await db.execute(sql`
+    delete from listings
+    where id in (
+      select l.id
+      from listings as l
+      where l.status = 'draft'
+        and l.published_at is null
+        and l.updated_at
+            <= now() - make_interval(days => ${ABANDONED_DRAFT_RETENTION_DAYS})
+        and not exists (
+          select 1 from listing_images as i where i.listing_id = l.id
+        )
+        and not exists (
+          select 1 from payments as p
+          where p.listing_id = l.id
+            and p.status in ('created', 'pending', 'succeeded')
+        )
+      limit ${limit}
+    )
   `);
   return result.rowCount ?? 0;
 }

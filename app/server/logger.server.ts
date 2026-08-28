@@ -33,7 +33,27 @@ const REDACT_KEYS = [
   "address",
 ];
 
+/**
+ * 伏字にしない、と決めてあるキー。
+ *
+ * ★すでに «出してよい形» に加工してある値。★ 部分一致の伏字は
+ * これらを巻き込む —— "recipient" には "ip" が、"idempotencyKey" には
+ * "key" が入っているため。結果、
+ *   - maskEmail で伏せたはずの宛先が [redacted] になり、helper が死んでいた
+ *   - 二重送信を追える唯一の手がかり（冪等キー）が消えていた
+ * という状態だった（2026-08-25 の公開前監査で指摘）。
+ *
+ * ★足すときは «その値が生の個人情報でないこと» を確かめること。★
+ */
+const NEVER_REDACT = new Set([
+  "recipient", // maskEmail 済み（先頭1文字＋ドメイン）
+  "recipientHmac",
+  "idempotencyKey",
+  "ipHash", // 鍵付きハッシュ。元に戻せない
+]);
+
 function shouldRedact(key: string): boolean {
+  if (NEVER_REDACT.has(key)) return false;
   const lower = key.toLowerCase();
   return REDACT_KEYS.some((needle) => lower.includes(needle));
 }
@@ -85,8 +105,18 @@ export function createLogger(options: {
       ...redactFields(fields),
     });
     // 構造化ログ以外で標準出力に書かない（eslint の no-console で強制）。
+    /*
+     * ★重要度をそのまま渡す。★ 以前は error 以外を全部 console.warn へ
+     * 出していたので、Cloudflare の画面では「cron が終わった」も
+     * 「メールを送った」も警告として並んだ。★「警告だけ見せて」が
+     * 全ログとほぼ同じ意味になり、量で気づく仕組みが作れない。★
+     */
     if (level === "error") console.error(line);
-    else console.warn(line);
+    else if (level === "warn") console.warn(line);
+    // ここが info/debug の唯一の出口。規則の狙いは「各所で console を
+    // 直に使わせない」ことなので、この1行だけ例外にする。
+    // eslint-disable-next-line no-console
+    else console.log(line);
   }
 
   return {

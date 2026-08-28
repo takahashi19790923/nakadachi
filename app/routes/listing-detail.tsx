@@ -1,3 +1,4 @@
+import { isbot } from "isbot";
 import { Form, Link } from "react-router";
 
 import { SITE } from "~/config/site";
@@ -58,10 +59,26 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     viewer ? isFavorited(db, viewer.id, listing.id) : Promise.resolve(false),
   ]);
 
-  // 閲覧数の更新で応答を待たせない。失敗しても画面は壊さない。
-  context.defer(
-    incrementViewCount(db, listing.id).catch(() => undefined),
-  );
+  /*
+   * 閲覧数の更新。
+   *
+   * ★数えないほうがよい相手を先に外す。★ 以前は «誰が開いても1回書く»
+   * だったので、
+   *   - クローラが巡回するたびに UPDATE が走る（人は見ていない）
+   *   - 投稿者が自分の掲載を開くたびに数が増える
+   * という状態だった。未ログインでも書き込みが起きるので、
+   * ★外から好きなだけ DB への書き込みを起こせる★経路でもあった。
+   *
+   * 同じ人が何度も開く分はまだ数えている（重複を見るには Cookie か
+   * 追加の読み取りが要る）。★数字は «おおよそ» として扱うこと。★
+   *
+   * 更新で応答を待たせない。失敗しても画面は壊さない。
+   */
+  const isCrawler = isbot(request.headers.get("user-agent") ?? "");
+  const isOwnerViewing = viewer?.id === listing.ownerId;
+  if (!isCrawler && !isOwnerViewing) {
+    context.defer(incrementViewCount(db, listing.id).catch(() => undefined));
+  }
 
   return {
     listing,
