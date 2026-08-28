@@ -42,6 +42,15 @@ export function buildContentSecurityPolicy(nonce: string): string {
     "worker-src 'self'",
     "manifest-src 'self'",
     "upgrade-insecure-requests",
+    /*
+     * ★止めた瞬間を観測できるようにする。★ これが無いと、注入の試みも
+     * うっかり壊した設定も «静かに効く»。利用者からは「ボタンが反応しない」
+     * としか見えず、報告も来ない（2026-08-25 の公開前監査で指摘）。
+     *
+     * 受け口は DB に書かない（api.csp-report.tsx）。荒らされたら
+     * この1行を消せば止まる。アプリの動作には影響しない。
+     */
+    "report-uri /api/csp-report",
   ].join("; ");
 }
 
