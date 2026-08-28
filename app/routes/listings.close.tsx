@@ -1,6 +1,12 @@
 import { Form, Link, redirect } from "react-router";
 
 import { CsrfInput } from "~/components/form";
+import {
+  CLOSE_PAGE_HEADING,
+  CLOSE_PAGE_INTENT,
+  CLOSE_PAGE_TITLE,
+  closePageMode,
+} from "~/domain/listing-status";
 import { privatePageMeta } from "~/domain/seo";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
@@ -29,8 +35,10 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   };
 }
 
-export function meta(): Route.MetaDescriptors {
-  return privatePageMeta("掲載を終了する");
+export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
+  // ★見出しと同じところから作る。★ 別々に書くと片方だけ古くなる。
+  const mode = loaderData ? closePageMode(loaderData.status) : "close";
+  return privatePageMeta(CLOSE_PAGE_TITLE[mode]);
 }
 
 export async function action({ request, context: rawContext, params }: Route.ActionArgs) {
@@ -72,19 +80,14 @@ export default function CloseListing({
   actionData,
 }: Route.ComponentProps) {
   const { listingId, status, csrfToken } = loaderData;
-  const canClose = status === "published" || status === "expired";
-  /*
-   * ★決済の確認中は本人でも削除できない。★ 遷移表で許していないので、
-   * 押させると必ず失敗する。押せるのに失敗するボタンは、利用者から見ると
-   * 「壊れている」としか映らない。理由を書いてボタンを出さない。
-   */
-  const canDelete = status === "draft" || status === "payment_pending";
+  const mode = closePageMode(status);
+  const canClose = mode === "close";
 
-  if (!canClose && !canDelete) {
+  if (mode === "blocked") {
     return (
       <div className="mx-auto w-full max-w-md px-4 py-10">
         <h1 className="text-2xl font-bold text-washi-900">
-          いまは削除できません
+          {CLOSE_PAGE_HEADING.blocked}
         </h1>
         <p className="mt-4 text-washi-700">
           お支払いの確認中です。確認が終わってから、あらためて操作してください。
@@ -100,7 +103,7 @@ export default function CloseListing({
   return (
     <div className="mx-auto w-full max-w-md px-4 py-10">
       <h1 className="text-2xl font-bold text-washi-900">
-        {canClose ? "掲載を終了しますか？" : "投稿を削除しますか？"}
+        {CLOSE_PAGE_HEADING[mode]}
       </h1>
 
       {actionData?.message ? (
@@ -139,13 +142,9 @@ export default function CloseListing({
 
       <Form method="post" className="mt-8 flex flex-wrap gap-3">
         <CsrfInput token={csrfToken} />
-        <input
-          type="hidden"
-          name="intent"
-          value={canClose ? "close" : "delete"}
-        />
+        <input type="hidden" name="intent" value={CLOSE_PAGE_INTENT[mode]} />
         <button type="submit" className="btn btn-danger">
-          {canClose ? "掲載を終了する" : "投稿を削除する"}
+          {CLOSE_PAGE_TITLE[mode]}
         </button>
         {/*
           ★戻り先を状態で変える。★ 下書きの投稿ページ（/listings/:id）は
