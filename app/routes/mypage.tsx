@@ -1,9 +1,11 @@
 import { Link } from "react-router";
 
 import { privatePageMeta } from "~/domain/seo";
-import { LISTING_STATUS_LABEL } from "~/domain/listing-status";
 import { requireUser } from "~/server/guards.server";
-import { getMypageCounts } from "~/server/services/engagement-service.server";
+import {
+  getMypageCounts,
+  toMypageGroupCounts,
+} from "~/server/services/engagement-service.server";
 import { getProfile } from "~/server/repositories/user-repository.server";
 import type { Route } from "./+types/mypage";
 import { getApp } from "~/server/app-context";
@@ -20,7 +22,8 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
 
   return {
     displayName: profile?.displayName ?? "",
-    counts,
+    // ★数字はタブの定義から畳んで作る。★ 状態を画面側で並べ直さない。
+    groups: toMypageGroupCounts(counts),
     isAdmin: user.role === "admin",
   };
 }
@@ -42,7 +45,7 @@ const LINKS: { to: string; label: string; description: string }[] = [
 ];
 
 export default function MyPage({ loaderData }: Route.ComponentProps) {
-  const { displayName, counts, isAdmin } = loaderData;
+  const { displayName, groups, isAdmin } = loaderData;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8">
@@ -50,18 +53,14 @@ export default function MyPage({ loaderData }: Route.ComponentProps) {
       <p className="mt-1 text-washi-600">{displayName} さん</p>
 
       <dl className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {(["draft", "payment_pending", "published", "closed"] as const).map(
-          (status) => (
-            <div key={status} className="card p-4 text-center">
-              <dt className="text-xs text-washi-600">
-                {LISTING_STATUS_LABEL[status]}
-              </dt>
-              <dd className="mt-1 text-2xl font-bold text-ai-800">
-                {counts[status] ?? 0}
-              </dd>
-            </div>
-          ),
-        )}
+        {groups.map((group) => (
+          <div key={group.key} className="card p-4 text-center">
+            <dt className="text-xs text-washi-600">{group.label}</dt>
+            <dd className="mt-1 text-2xl font-bold text-ai-800">
+              {group.count}
+            </dd>
+          </div>
+        ))}
       </dl>
 
       <ul className="mt-6 space-y-2">
