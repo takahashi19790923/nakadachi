@@ -32,6 +32,28 @@ export const LISTING_STATUSES = [
 
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
 
+/**
+ * 管理画面の「投稿の状態」に出さない状態。
+ *
+ * deleted は論理削除で、件数の問い合わせ自体が deleted_at is null で
+ * 絞っているため常に 0 になる。並べても意味が無い。
+ */
+export const ADMIN_HIDDEN_STATUSES: readonly ListingStatus[] = ["deleted"];
+
+/**
+ * 管理画面に並べる状態。
+ *
+ * ★一覧を手で書かない。★ 以前は7つを直接並べていて、
+ * ★payment_processing（コンビニ払いなどの入金確認中）が抜けていた★。
+ * 支払い手段はダッシュボードの設定で増やせるので、後払いを有効にした日から
+ * 「入金確認中で止まっている投稿」が管理画面のどこにも出なくなる。
+ *
+ * 状態を足したら自動でここに出る。出したくないものは
+ * ADMIN_HIDDEN_STATUSES に、理由と一緒に書く。
+ */
+export const ADMIN_STATUS_TILES: readonly ListingStatus[] =
+  LISTING_STATUSES.filter((s) => !ADMIN_HIDDEN_STATUSES.includes(s));
+
 /** 誰による遷移か。API から呼ぶときに必ず渡す */
 /**
  * 誰がその遷移を起こしたか。
