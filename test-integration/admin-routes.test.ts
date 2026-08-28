@@ -158,6 +158,141 @@ async function makePublished(ownerId: string): Promise<string> {
   });
 }
 
+// ── 投稿の削除 ────────────────────────────────────────────────────
+
+/**
+ * ★状態遷移表は «管理者は削除できる» とずっと言っていたのに、
+ * それを呼ぶ画面がどこにも無かった。★
+ *
+ * 監査ログの種別（listing_delete）まで用意されていて、配線だけが無い。
+ * 型もテストも通るので、誰も気づけない形で «できるはずのこと» が
+ * できないまま残っていた（2026-08-29 に発見）。
+ *
+ * 返金で suspended になった投稿を運営が片付けようとして判明した。
+ * 利用者側にも管理側にも削除の手段が無く、消せなかった。
+ */
+describe("★投稿を削除する（管理者・取り消せない）★", () => {
+  it("「削除」と入力しなければ消えない", async () => {
+    /*
+     * ★これがこの機能のいちばん大事な部分。★ 削除は終端で、状態遷移表に
+     * 戻す経路が無い（deleted: {}）。非公開・却下と同じ «押すだけ» で
+     * 並べない。急いでいるときに、隣にあるボタンは押される。
+     */
+    const listingId = await makePublished(owner.id);
+
+    const result = await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "delete", reason: "動作確認用のテスト投稿のため" },
+    });
+
+    expect(result.fields?.confirm).toBeTruthy();
+
+    const [row] = await db
+      .select({ status: listings.status, deletedAt: listings.deletedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("published");
+    expect(row!.deletedAt).toBeNull();
+
+    // 記録も残さない（やっていないことを «やった» と書かない）
+    expect(await db.select().from(adminActions)).toHaveLength(0);
+  });
+
+  it("違う語を入力しても消えない", async () => {
+    const listingId = await makePublished(owner.id);
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "delete", reason: "動作確認用のテスト投稿のため", confirm: "はい" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("published");
+  });
+
+  it("「削除」と入力すれば消え、deleted_at が入り、記録が残る", async () => {
+    const listingId = await makePublished(owner.id);
+
+    const result = await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "delete", reason: "動作確認用のテスト投稿のため", confirm: "削除" },
+    });
+
+    expect(result.message).toBeNull();
+    expect(await getPublishedListing(db, listingId)).toBeNull();
+
+    const [row] = await db
+      .select({ status: listings.status, deletedAt: listings.deletedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("deleted");
+    /*
+     * ★deleted_at も必ず入ること。★ 件数の問い合わせは status ではなく
+     * deleted_at is null で絞っている。status だけ変えても、マイページや
+     * 管理画面の数字からは消えない。
+     */
+    expect(row!.deletedAt).not.toBeNull();
+
+    const actions = await db
+      .select({ type: adminActions.actionType, reason: adminActions.reason })
+      .from(adminActions);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.type).toBe("listing_delete");
+    expect(actions[0]!.reason).toBe("動作確認用のテスト投稿のため");
+
+    const audit = await db
+      .select({ action: auditLogs.action })
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "admin.listing_deleted"));
+    expect(audit).toHaveLength(1);
+  });
+
+  it("★返金で非公開になった投稿も消せる★", async () => {
+    // 今回まさに消せなかった状態。suspended → deleted は管理者に許されている。
+    const listingId = await makePublished(owner.id);
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "掲載料が返金されたため" },
+    });
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "delete", reason: "動作確認用のテスト投稿のため", confirm: "削除" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status, deletedAt: listings.deletedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("deleted");
+    expect(row!.deletedAt).not.toBeNull();
+  });
+
+  it("理由が短ければ、確認を入力しても消えない", async () => {
+    const listingId = await makePublished(owner.id);
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "delete", reason: "テスト", confirm: "削除" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("published");
+  });
+});
+
 // ── 投稿の非公開化 ────────────────────────────────────────────────
 
 describe("★投稿を非公開にする★", () => {
