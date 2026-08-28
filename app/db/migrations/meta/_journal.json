@@ -43,6 +43,13 @@
       "when": 1787928678703,
       "tag": "0005_demonic_triathlon",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787929365202,
+      "tag": "0006_wise_jackpot",
+      "breakpoints": true
     }
   ]
 }

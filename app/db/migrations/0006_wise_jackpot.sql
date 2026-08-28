@@ -1,0 +1,1 @@
+ALTER TYPE "public"."admin_action_type" ADD VALUE 'disclosure_view' BEFORE 'banned_word_add';
