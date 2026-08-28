@@ -7,8 +7,32 @@ import { hashIp, randomToken, sha256Hex } from "./crypto.server.ts";
 import type { Db } from "./db.server.ts";
 import { isSecureOrigin, requireSecret, type AppEnv } from "./env.server.ts";
 
-/** 30日。長くすると、端末を離れた隙に使える時間が延びる */
-const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+/**
+ * セッションの有効期間。90日（2026-08-28、30日から延長）。
+ *
+ * ★延ばした理由は、送信するメールの数を減らすため。★
+ * このサイトは合言葉を持たない（メールでしか入れない）ので、
+ * セッションが切れる＝ログインコードのメールが1通増える、という関係になる。
+ * 30日だと、毎日使う人でも年に12回ログインし直すことになり、
+ * 利用者が増えたときに送信事業者の枠を圧迫する。90日なら年4回。
+ *
+ * ★代償：端末を離れた隙に使える時間も、そのぶん延びる。★
+ * 共用のパソコンでログアウトし忘れた場合、90日間そのまま入れる。
+ * 受け入れているのは、
+ *   - Cookie は __Host- 付き・HttpOnly・Secure・SameSite=Lax
+ *   - 停止・削除された利用者は、セッションが生きていても弾く
+ *     （getSessionUser が users.status を毎回見る）
+ *   - 退会・ログアウトでその場で無効になる
+ * という前提があるため。
+ *
+ * ★まだ «最後に使った日» を見ていない。★ つまり1回使ったきり放置された
+ * セッションも90日生き続ける。使うたびに期限を延ばして、放置は短く切る
+ * （sliding expiration）ほうが、メールの数も安全性も両方よくなる。
+ * 実装していない理由は、リクエストごとに sessions を UPDATE することになり、
+ * 読み取りだけのページにも書き込みが増えるため。入れるなら
+ * 「期限の残りが半分を切ったときだけ延ばす」形にする。
+ */
+const SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
 export interface SessionUser {
   readonly id: string;
