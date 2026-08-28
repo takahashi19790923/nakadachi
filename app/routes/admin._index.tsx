@@ -34,6 +34,11 @@ const ADMIN_LINKS = [
   { to: "/admin/listings", label: "投稿一覧", description: "公開・非公開の切り替え" },
   { to: "/admin/reports", label: "通報一覧", description: "未対応の通報" },
   {
+    to: "/admin/flags",
+    label: "運用スイッチ",
+    description: "事故のときに、一部の機能だけ止める",
+  },
+  {
     to: "/admin/disclosure",
     label: "発信者情報の取り出し",
     description: "開示請求・捜査関係事項照会への対応（引いた事実は記録に残る）",

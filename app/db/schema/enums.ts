@@ -113,6 +113,8 @@ export const adminActionTypeEnum = pgEnum("admin_action_type", [
    * 約束している当のもの。★
    */
   "disclosure_view",
+  /** 運用スイッチ（新規登録・投稿・メッセージの停止）の切り替え */
+  "site_flags_change",
   "banned_word_add",
   "banned_word_remove",
 ]);

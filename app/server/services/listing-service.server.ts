@@ -18,6 +18,7 @@ import type { Db } from "../db.server.ts";
 import { AppError, notFound } from "../errors.ts";
 import type { Logger } from "../logger.server.ts";
 import { isValidAreaPair } from "../repositories/location-repository.server.ts";
+import { getSiteFlags, pausedError } from "./site-flags.server.ts";
 import {
   createSystemReport,
   findBlockingWord,
@@ -119,6 +120,13 @@ export async function createDraft(
   ownerId: string,
   input: ListingInput,
 ): Promise<SaveDraftResult> {
+  /*
+    * ★新しい掲載の受付を止めるスイッチ。★ 公開中のものはそのまま。
+    * 決済も startListingCheckout 側で止める（下書きだけ作れても意味がない）。
+    */
+  const flags = await getSiteFlags(db);
+  if (flags.listingsPaused) throw pausedError("listing", flags.notice);
+
   await validateAgainstDatabase(db, input);
   const categoryId = await resolveCategoryId(db, input.categorySlug);
   const listingId = ulid();

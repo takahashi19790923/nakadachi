@@ -11,6 +11,7 @@ import {
 import { ulid } from "~/domain/ulid.ts";
 import type { Db } from "../db.server.ts";
 import { AppError, notFound } from "../errors.ts";
+import { getSiteFlags, pausedError } from "./site-flags.server.ts";
 import {
   createSystemReport,
   findBlockingWord,
@@ -280,6 +281,10 @@ export async function sendMessage(options: {
 
   const allowed = await isParticipant(db, threadId, senderId);
   if (!allowed) throw notFound(`send denied: ${threadId}`);
+
+  // ★メッセージ送信の停止スイッチ。★ 読むほうは止めない。
+  const flags = await getSiteFlags(db);
+  if (flags.messagesPaused) throw pausedError("message", flags.notice);
 
   const blockedWord = await findBlockingWord(db, body);
   if (blockedWord) {

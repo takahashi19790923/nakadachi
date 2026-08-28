@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -140,3 +141,35 @@ export const rateLimits = pgTable(
   },
   (t) => [index("rate_limits_expires_idx").on(t.expiresAt)],
 );
+
+/**
+ * 運用の切り替えスイッチ。
+ *
+ * ★事故のときに «止める» 手段が、これまで再デプロイしかなかった。★
+ * 「掲載の受付だけ止めたい」「登録だけ止めたい」ができず、
+ * 手順書にも「Workers のルートを外す」としか書いていなかった
+ * （全部止まる。復旧の練習中にも使えない）。
+ *
+ * ★1行しか持たない。★ id は固定値。行が無ければ「全部動いている」と
+ * みなす（fail-open）。ここを fail-close にすると、この表を作り忘れた
+ * 環境や、移行の途中でサイトが真っ白になる。
+ *
+ * ★DB が落ちているときには使えない。★ その場合の «全部止める» は
+ * Cloudflare 側（ルートを外す／エッジのルール）で行う。
+ * ここが担当するのは「サイトは動いているが、ある機能だけ止めたい」。
+ */
+export const siteFlags = pgTable("site_flags", {
+  /** 常に 'singleton'。行を1つに保つための固定値 */
+  id: varchar("id", { length: 16 }).primaryKey(),
+  /** 新規登録を止める（既存の利用者はログインできる） */
+  signupsPaused: boolean("signups_paused").notNull().default(false),
+  /** 新しい掲載の作成と決済を止める（公開中のものはそのまま） */
+  listingsPaused: boolean("listings_paused").notNull().default(false),
+  /** メッセージの送信を止める */
+  messagesPaused: boolean("messages_paused").notNull().default(false),
+  /** 画面に出す案内。空なら既定の文言 */
+  notice: varchar("notice", { length: 300 }),
+  /** 最後に触った管理者。誰が止めたかを追えるように */
+  updatedBy: ulidRef("updated_by"),
+  ...timestamps(),
+});

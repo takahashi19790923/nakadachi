@@ -1,0 +1,1 @@
+ALTER TYPE "public"."admin_action_type" ADD VALUE 'site_flags_change' BEFORE 'banned_word_add';
