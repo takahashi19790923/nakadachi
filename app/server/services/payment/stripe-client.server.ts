@@ -182,6 +182,26 @@ export async function createCheckoutSession(options: {
        * 二重に切る。設定を戻されてもここで止まる。
        */
       managed_payments: { enabled: false },
+      /*
+       * ★Adaptive Pricing を明示的に切る。★
+       *
+       * 有効だと、日本国外から来た人には現地通貨へ換算して見せる。
+       * ★そのとき Session の currency と amount_total は換算後になる。★
+       * こちらの検証は 110 / jpy の完全一致なので（payment-service の
+       * isValidListingFeePayment）、★支払いは成立しているのに
+       * amount_mismatch で公開されない★。決済事業者の画面では成功、
+       * こちらの画面にもエラーは出ない —— このコードがいちばん
+       * 防ごうとしている壊れ方そのものになる。
+       *
+       * 2026-08-29、preview の Session に adaptive_pricing.enabled=true が
+       * 入っているのを見つけた（アカウント設定の既定）。
+       *
+       * ★アカウント設定に任せない。★ サンドボックスと本番で既定が違い、
+       * 誰かが画面から戻すこともできる。ここで毎回明示する。
+       * Session の作成で受け付けられることは実測済み
+       * （adaptive_pricing.enabled=false / currency_conversion=null）。
+       */
+      adaptive_pricing: { enabled: false },
       success_url: options.successUrl,
       cancel_url: options.cancelUrl,
       client_reference_id: options.clientReferenceId,
