@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -308,6 +309,66 @@ export async function confirmIfProduction(
   }
 }
 
+
+/**
+ * TLS の設定。
+ *
+ * ★暗号化だけでは、途中で誰かに入れ替えられるのを防げない。★
+ *
+ * Supabase の Direct connection は自己署名の CA を使っていて、素の pg は
+ * 検証できない。そのため rejectUnauthorized: false（＝暗号化のみ）にして
+ * いたが、これは★中間者に対しては無防備★という意味になる。
+ * ホテルやコワーキングの回線からマイグレーションを流すと、相手は
+ * 適当な証明書を出すだけで本番の DB のパスワードを受け取り、
+ * 流れる SQL を全部見て、書き換えることもできる。
+ *
+ * ★CA を渡せば、ちゃんと検証する。★
+ *   SUPABASE_CA_PATH=/path/to/prod-ca.crt
+ * 証明書は Supabase のダッシュボード
+ * （Settings → Database → SSL Configuration）から落とす。
+ * ★リポジトリには入れない。★ 秘密ではないが、置き場所を1つ増やさない。
+ *
+ * 渡されていなければ、暗号化のみで進む。ただし★毎回警告を出す★。
+ * 黙って弱い設定で動き続けるのがいちばん悪い。
+ */
+function sslOptionsFor(connectionString: string) {
+  if (connectionString.includes("neon.tech")) {
+    return { rejectUnauthorized: true };
+  }
+  if (!isSupabaseUrl(connectionString)) {
+    // localhost の PGlite など。TLS を使わない。
+    return undefined;
+  }
+
+  const caPath = process.env.SUPABASE_CA_PATH?.trim();
+  if (caPath) {
+    try {
+      return { ca: readFileSync(caPath, "utf8"), rejectUnauthorized: true };
+    } catch (error) {
+      throw new Error(
+        `SUPABASE_CA_PATH の証明書を読めません（${caPath}）。` +
+          `パスを直すか、変数を外してください: ${describeError(error)}`,
+        { cause: error },
+      );
+    }
+  }
+
+  console.warn(
+    [
+      "",
+      "★警告: 接続先の証明書を検証していません（暗号化のみ）。★",
+      "  信頼できない回線からは実行しないでください。中間者に",
+      "  本番の資格情報と、流れる SQL の中身を渡すことになります。",
+      "",
+      "  検証を有効にするには、Supabase のダッシュボード",
+      "  （Settings → Database → SSL Configuration）から証明書を落とし、",
+      "  SUPABASE_CA_PATH にそのパスを入れてください。",
+      "",
+    ].join("\n"),
+  );
+  return { rejectUnauthorized: false };
+}
+
 export function createScriptDb(connectionString: string): {
   db: Db;
   pool: pg.Pool;
@@ -316,14 +377,7 @@ export function createScriptDb(connectionString: string): {
     connectionString,
     // スクリプトは直列に流すので1本で足りる。
     max: 1,
-    // Neon も Supabase も TLS で繋ぐ。ローカルの PGlite などでは無効になる。
-    // Supabase の Direct connection は証明書チェーンが素の pg で検証できない
-    // （自己署名の CA。sslmode=verify-full には CA の配布が要る）ため、暗号化のみ。
-    ssl: connectionString.includes("neon.tech")
-      ? { rejectUnauthorized: true }
-      : isSupabaseUrl(connectionString)
-        ? { rejectUnauthorized: false }
-        : undefined,
+    ssl: sslOptionsFor(connectionString),
   });
 
   return {
