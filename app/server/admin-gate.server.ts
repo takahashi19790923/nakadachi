@@ -1,5 +1,10 @@
 import { expireCookie, readCookie, serializeCookie } from "./cookies.server.ts";
-import { hmacSha256Hex, timingSafeEqual, toBase64Url } from "./crypto.server.ts";
+import {
+  hmacSha256Hex,
+  sha256Hex,
+  timingSafeEqual,
+  toBase64Url,
+} from "./crypto.server.ts";
 import { isSecureOrigin, type AppEnv } from "./env.server.ts";
 
 /**
@@ -21,8 +26,10 @@ import { isSecureOrigin, type AppEnv } from "./env.server.ts";
  *
  * ■ 通過の証拠は署名付き Cookie
  *   中身は期限と署名だけで、資格情報そのものは入らない。
- *   ★署名鍵を利用者名とパスワードそのものから作っている。★
- *   値を変えれば、発行済みの証拠が全部その場で無効になる。
+ *   ★署名鍵は SESSION_SECRET。★ 資格情報はハッシュにしてメッセージ側へ
+ *   混ぜるので、値を変えれば発行済みの証拠は全部その場で無効になる。
+ *   （以前は鍵そのものを資格情報から作っていた。Cookie が1つ漏れると
+ *   パスワードをオフラインで総当たりできる状態だった）
  */
 
 export const GATE_COOKIE = "__Host-nakadachi_admin_gate";
@@ -37,8 +44,37 @@ function credentials(env: AppEnv) {
   };
 }
 
-async function sign(user: string, pass: string, expMs: number): Promise<string> {
-  const hex = await hmacSha256Hex(`admin-gate:${user}:${pass}`, String(expMs));
+/**
+ * 通過証の署名。
+ *
+ * ★署名鍵に資格情報を使わない。★
+ *
+ * 以前は HMAC の **鍵** を `admin-gate:${user}:${pass}` から作っていた。
+ * すると、Cookie を1つ手に入れた相手は
+ *   期限（平文で入っている）＋ 署名
+ * の対を持つことになり、★手元で候補のパスワードを片っ端から試せる★。
+ * 通信も何も要らない、完全にオフラインの総当たり。
+ * しかもこの資格情報は★全プロジェクト共通★なので、1つ割れると全部割れる。
+ *
+ * いまは鍵を SESSION_SECRET（48バイトの乱数）にしてある。
+ * 資格情報は「メッセージ側」にハッシュにして混ぜるので、
+ * ★値を変えれば発行済みの通過証が全部その場で無効になる★という
+ * これまでの性質はそのまま残る。
+ *
+ * SESSION_SECRET が無い環境では通過証を作れない（fail-close）。
+ */
+async function sign(
+  env: AppEnv,
+  user: string,
+  pass: string,
+  expMs: number,
+): Promise<string | null> {
+  const key = String(env.SESSION_SECRET ?? "").trim();
+  if (!key) return null;
+
+  // 資格情報そのものはメッセージにも生では入れない。
+  const material = await sha256Hex(`admin-gate:${user}:${pass}`);
+  const hex = await hmacSha256Hex(key, `${material}:${expMs}`);
   // hex をそのまま使わず短くする（Cookie の長さを抑えるだけの理由）。
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
@@ -87,7 +123,12 @@ export async function issueGateCookie(
 ): Promise<string> {
   const { user, pass } = credentials(env);
   const expMs = nowMs + GATE_TTL_MS;
-  const value = `${expMs}.${await sign(user, pass, expMs)}`;
+  const signature = await sign(env, user, pass, expMs);
+  if (!signature) {
+    // SESSION_SECRET が無ければ通過証を作らない（誰も通れない状態を保つ）。
+    throw new Error("SESSION_SECRET is required to issue the admin gate cookie");
+  }
+  const value = `${expMs}.${signature}`;
   return serializeCookie(GATE_COOKIE, value, {
     secure: isSecureOrigin(env),
     httpOnly: true,
@@ -125,5 +166,7 @@ export async function hasValidGate(
   const expMs = Number(raw.slice(0, dot));
   if (!Number.isFinite(expMs) || expMs <= nowMs) return false;
 
-  return timingSafeEqual(await sign(user, pass, expMs), raw.slice(dot + 1));
+  const expected = await sign(env, user, pass, expMs);
+  if (!expected) return false; // SESSION_SECRET が無ければ誰も通さない
+  return timingSafeEqual(expected, raw.slice(dot + 1));
 }
