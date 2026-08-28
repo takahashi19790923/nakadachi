@@ -293,7 +293,7 @@ Worker の Secret ではないので、`secrets:put` では替わりません。
 3. Git 履歴から消す（`git filter-repo` など）。ただし完全ではない
 4. GitHub のサポートへキャッシュの削除を依頼する
 5. いつ・何が・どこへ出たかを記録する（値そのものは書かない）
-6. 影響範囲を確認する（Stripe の決済履歴、Neon の接続ログ、Resend の送信履歴）
+6. 影響範囲を確認する（Stripe の決済履歴、**Supabase の接続ログ（本番）／Neon（preview）**、Resend の送信履歴）
 
 ---
 
