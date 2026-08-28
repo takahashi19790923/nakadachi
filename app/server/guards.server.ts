@@ -82,22 +82,36 @@ export async function requireAdmin(args: GuardArgs): Promise<SessionUser> {
   const user = await loadUser(args);
   if (!user || user.role !== "admin") {
     /*
-     * ★管理画面を叩かれたことは必ず残す。★
+     * ★記録するのは「ログイン済みの利用者が管理画面を叩いた」ときだけ。★
+     *
+     * 未ログインの相手は記録しない。理由は2つある。
+     *
+     * 1. ★未ログインでは DB に触らない、という前提を壊さないため。★
+     *    Cookie が無ければ getSessionUser は接続を作らずに戻る（意図的な
+     *    設計。公開ページを見ているだけの人に接続を張らない）。ここで
+     *    getDb() を呼ぶと、★/admin を叩くだけで誰でも DB 接続を作らせられる★。
+     *    実際、これを入れた直後に E2E（DB を持たない構成）で
+     *    /admin が 404 ではなく 500 になった。
+     * 2. 件数を攻撃者が決められるため。audit_logs は消さない表なので、
+     *    素性の分からない相手の分まで書くと保管費用が攻撃手段になる。
+     *
+     * ★ログイン済みなら話が別。★ 「誰か」が分かっていて、その人が
+     * 管理画面を探っているのは日常的には起きない。件数もその人の
+     * レート制限に縛られる。ここは知りたい。
      *
      * 利用者向けの画面で他人のものを触られたとき（assertOwner の 404）は
-     * 記録しない。誤操作や古いリンクで日常的に起きるうえ、件数を
-     * 攻撃者が決められるので、永久保存の表が埋まる。
-     * 管理画面への未認可のアクセスは「日常的には起きないはず」のもので、
-     * 起きたら知りたい。件数も URL を知っている相手に限られる。
+     * 記録しない。誤操作や古いリンクで日常的に起きる。
      */
-    await writeAuditLog(args.context.getDb(), args.context.env, {
-      action: "authz.denied",
-      actorId: user?.id ?? null,
-      actorRole: user?.role ?? "anonymous",
-      targetType: "admin_route",
-      targetId: new URL(args.request.url).pathname.slice(0, 120),
-      request: args.request,
-    });
+    if (user) {
+      await writeAuditLog(args.context.getDb(), args.context.env, {
+        action: "authz.denied",
+        actorId: user.id,
+        actorRole: user.role,
+        targetType: "admin_route",
+        targetId: new URL(args.request.url).pathname,
+        request: args.request,
+      });
+    }
     throw notFound("admin route accessed without admin role");
   }
   return user;

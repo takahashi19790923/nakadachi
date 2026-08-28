@@ -164,3 +164,87 @@ describe("認証まわりの監査ログの保持期間", () => {
     ).toEqual([{ n: 1 }]);
   });
 });
+
+/**
+ * 未ログインの相手に DB を触らせない。
+ *
+ * ★これは「性能の話」ではなく「設計の前提」。★
+ * getSessionUser は Cookie が無ければ接続を作らずに戻る。公開ページを
+ * 見ているだけの人に接続を張らないため、そして DATABASE_URL が無い環境
+ * （E2E など）でも規約ページが出るようにするため。
+ *
+ * 2026-08-28、authz.denied を無条件に書くようにしたら、
+ * ★/admin を叩くだけで誰でも DB 接続を作らせられる★状態になり、
+ * DB を持たない E2E で /admin が 404 ではなく 500 になった。
+ * 「記録を増やす」変更が、記録と関係のない前提を壊した例。
+ */
+describe("未ログインの /admin", () => {
+  beforeEach(async () => {
+    db = await resetDatabase();
+  });
+
+  it("★DB を1度も触らずに 404 になる★", async () => {
+    const { requireAdmin } = await import("~/server/guards.server");
+
+    let dbTouched = false;
+    const context = {
+      env,
+      getDb: () => {
+        dbTouched = true;
+        return db;
+      },
+      defer: () => undefined,
+      setCookie: () => undefined,
+      logger: testLogger,
+      nonce: "n",
+      requestId: "r",
+      csrfToken: "c",
+      ctx: {} as ExecutionContext,
+    };
+
+    const request = new Request("http://localhost:5273/admin");
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      requireAdmin({ request, context: context as any }),
+    ).rejects.toBeInstanceOf(Response);
+
+    expect(dbTouched, "未ログインでは DB に触らないこと").toBe(false);
+  });
+
+  it("ログイン済みで管理者でなければ、記録は残る", async () => {
+    const { requireAdmin } = await import("~/server/guards.server");
+    const { makeUser } = await import("./helpers.ts");
+    const { createSession } = await import("~/server/session.server");
+
+    const user = await makeUser(db, "not-admin@example.test");
+    const { setCookie } = await createSession({
+      db,
+      env,
+      userId: user.id,
+      request: req(),
+    });
+    const token = setCookie.split(";")[0]!.split("=")[1]!;
+
+    const context = {
+      env,
+      getDb: () => db,
+      defer: () => undefined,
+      setCookie: () => undefined,
+      logger: testLogger,
+      nonce: "n",
+      requestId: "r",
+      csrfToken: "c",
+      ctx: {} as ExecutionContext,
+    };
+    const request = new Request("http://localhost:5273/admin/users", {
+      headers: { cookie: `${env.SESSION_COOKIE_NAME}=${token}` },
+    });
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      requireAdmin({ request, context: context as any }),
+    ).rejects.toBeInstanceOf(Response);
+
+    expect(await actions("authz.denied")).toEqual(["authz.denied"]);
+  });
+});
