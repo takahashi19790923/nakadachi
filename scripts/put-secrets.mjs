@@ -1,5 +1,6 @@
 import { Writable } from "node:stream";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 
 /**
@@ -139,6 +140,114 @@ if (only) {
  */
 const dryRun = args.includes("--dry-run");
 
+/**
+ * ★どこへ入れるのかを、入れる前に確かめる。★
+ *
+ * wrangler は「いま居るディレクトリ」の設定を読む。スクリプトの側は
+ * それを知らないので、★別のリポジトリで走らせても素直に動く★。
+ *
+ * 2026-08-29、実際に別サービス（kigen-memo）の本番へ、なかだちの
+ * Stripe テスト鍵を投入して稼働中の決済を壊した。画面には
+ * 「Creating the secret for the Pages project "kigen-memo"」と出ていたが、
+ * ★その行が流れるのは、値を入力し終えたあと★で、止める役には立たない。
+ *
+ * 原因は「cd を付け忘れた」ことだが、対策を「次から気をつける」に
+ * 置かない。★道具の側が、行き先を先に見せて確かめる。★
+ *
+ * ★ここで防げる範囲を正確に言う。★ あの事故は «kigen-memo の中で
+ * kigen-memo のスクリプトを走らせた» なので、なかだち側のこの検査は
+ * 当時は働かない位置にある。塞げるのは「なかだちのスクリプトを
+ * 別の場所で走らせる」ほう。★同じ検査を各サービスへ入れて初めて
+ * 事故そのものが塞がる★（新サービス構築ルール.md に書く）。
+ */
+const EXPECTED_PROJECT = "nakadachi";
+
+/** JSONC からコメントを外す。文字列の中の // と /* は落とさない */
+function stripJsonComments(text) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+      out += "\n";
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i += 1;
+      i += 1;
+      continue;
+    }
+    out += c;
+  }
+  // 末尾コンマ（JSONC では書ける）を落とす
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** いま居るディレクトリの wrangler 設定を読む。無ければ null */
+function readWranglerConfig() {
+  for (const file of ["wrangler.jsonc", "wrangler.json"]) {
+    try {
+      const raw = readFileSync(file, "utf8");
+      return { file, config: JSON.parse(stripJsonComments(raw)) };
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw new Error(`${file} を読めませんでした: ${error.message}`, {
+        cause: error,
+      });
+    }
+  }
+  return null;
+}
+
+const found = readWranglerConfig();
+
+if (!found) {
+  console.error("\n★ここは nakadachi のディレクトリではありません。★");
+  console.error(`  いま居る場所: ${process.cwd()}`);
+  console.error("  wrangler の設定ファイルが見つかりません。");
+  console.error("  移動してから、もう一度実行してください:");
+  console.error('    cd "C:\\Users\\htaka\\OneDrive\\ドキュメント\\Kimi\\Workspaces\\nakadachi"\n');
+  process.exit(1);
+}
+
+const projectName = found.config?.name;
+
+if (projectName !== EXPECTED_PROJECT) {
+  /*
+   * ★ここは «確認して続行» にしない。★ 押せる選択肢として出すと、
+   * 急いでいる人は押す。実際に押した。行き先が違うなら、止める。
+   */
+  console.error("\n★別のプロジェクトのディレクトリで実行しています。★");
+  console.error(`  ${found.file} のプロジェクト名: ${projectName ?? "(無し)"}`);
+  console.error(`  このスクリプトが投入してよいのは: ${EXPECTED_PROJECT}`);
+  console.error(`  いま居る場所: ${process.cwd()}`);
+  console.error("\n  ★このまま進めると、別のサービスの秘密を上書きします。★");
+  console.error("  なかだちのディレクトリへ移動してから実行してください。\n");
+  process.exit(1);
+}
+
+const envConfig = found.config?.env?.[targetEnv];
+if (!envConfig) {
+  console.error(`\n★${targetEnv} という環境は ${found.file} にありません。★`);
+  console.error(`  使えるのは: ${Object.keys(found.config?.env ?? {}).join(", ") || "(無し)"}\n`);
+  process.exit(1);
+}
+
 /** wrangler へ値を渡す。改行を足さない */
 function putSecret(name, value) {
   if (dryRun) {
@@ -208,42 +317,96 @@ async function verifyTurnstileSecret(value) {
  */
 function createHiddenInterface() {
   let hiding = false;
-  const out = new Writable({
+
+  /*
+   * ★出力そのものを止める。★
+   *
+   * 一度 rl._writeToOutput を差し替えて * を出す形にしたが、
+   * ★パイプ経由では効かず、値がそのまま画面に出た★（2026-08-29 に実測）。
+   * 実行のされ方で漏れたり漏れなかったりする作りは、
+   * «漏れない» と言えない。書き出し口を1つに絞って、そこを閉じる。
+   *
+   * 代わりに、Enter のあとで «受け取った文字数» を出す。
+   * 最初は何も出さなかったので、貼り付けても画面が動かず
+   * ★貼れたのか分からない★状態だった（実際にそう言われた）。
+   * 見えない仕掛けは、使う人には «壊れている» と区別がつかない。
+   */
+  const muted = new Writable({
     write(chunk, _encoding, callback) {
       if (!hiding) process.stdout.write(chunk);
       callback();
     },
   });
 
-  const rl = createInterface({ input: process.stdin, output: out, terminal: true });
+  const rl = createInterface({ input: process.stdin, output: muted, terminal: true });
 
   return {
     close: () => rl.close(),
-    /** 画面に出さずに1行受け取る */
-    async secret(prompt) {
-      process.stdout.write(prompt);
+    /** 値を画面に出さずに1行受け取る */
+    async secret(text) {
+      // プロンプトは自分で出す（readline 側は黙らせるため）。
+      process.stdout.write(text);
       hiding = true;
       try {
         const answer = await rl.question("");
         process.stdout.write("\n");
+        process.stdout.write(
+          answer.length === 0
+            ? "  （何も入力されていません → この項目は飛ばします）\n"
+            : `  ✓ ${answer.length}文字を受け取りました（内容は表示しません）\n`,
+        );
         return answer;
       } finally {
         hiding = false;
       }
     },
     /** 画面に出してよい質問（確認など） */
-    question: (prompt) => rl.question(prompt),
+    question: (text) => rl.question(text),
   };
 }
-
 const rl = createHiddenInterface();
 
 const items = only ? SECRETS.filter((s) => only.includes(s.name)) : SECRETS;
 
+/*
+ * ★行き先を、入力を受け取る前に見せる。★
+ *
+ * 事故のときに画面へ出ていた行き先は、値を入れ終えたあとに流れた。
+ * 見せる位置が違うと、書いてあっても止まらない。
+ *
+ * 確認は y/N ではなく★環境名を打たせる★。preview と production は
+ * 1つの取り違えで意味がまるで違う（片方は稼働中の決済に効く）。
+ * y を押す動作は、どちらでも同じ動作になってしまう。
+ */
+console.log("\n──────── 投入先 ────────");
+console.log(`  プロジェクト : ${projectName}`);
+console.log(`  環境         : ${targetEnv}`);
+console.log(`  公開URL      : ${envConfig.vars?.APP_ORIGIN ?? "(不明)"}`);
+console.log(`  設定ファイル : ${found.file}`);
+console.log(`  ディレクトリ : ${process.cwd()}`);
+console.log(`  入れる項目   : ${items.map((s) => s.name).join(", ")}`);
+console.log("────────────────────────");
+if (dryRun) console.log("★--dry-run：実際には投入しません。★");
+
+const typed = (
+  await rl.question(`\nこの ${items.length} 項目を上へ入れます。よければ「${targetEnv}」と入力: `)
+).trim();
+
+if (typed !== targetEnv) {
+  console.log(`\n中止しました（入力: ${typed === "" ? "(空)" : typed}）。何も変更していません。`);
+  rl.close();
+  process.exit(1);
+}
+
+console.log("");
 console.log(`環境: ${targetEnv}${dryRun ? "（--dry-run：投入しません）" : ""}`);
 console.log(`対象: ${items.length}項目${only ? "（--only で絞り込み）" : ""}`);
 console.log("空のまま Enter を押すと、その項目は飛ばします。");
-console.log("★入力した値は画面に表示されません。★ 貼り付けても大丈夫です。\n");
+console.log(
+  "★入力した値は画面に表示されません。★ 貼り付けても画面は動きませんが、\n" +
+    "  ちゃんと入っています。貼ったら Enter を押してください。\n" +
+    "  Enter のあとに «何文字受け取ったか» が出ます。\n",
+);
 
 for (const secret of items) {
   let value;
