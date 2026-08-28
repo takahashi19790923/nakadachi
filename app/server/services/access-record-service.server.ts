@@ -6,9 +6,11 @@ import {
   type AccessRecordAction,
 } from "~/db/schema/index.ts";
 import { ulid } from "~/domain/ulid.ts";
+import { writeAdminAction, writeAuditLog } from "../audit.server.ts";
 import { decryptString, encryptString, hmacSha256Hex } from "../crypto.server.ts";
 import type { Db } from "../db.server.ts";
 import { requireSecret, type AppEnv } from "../env.server.ts";
+import { AppError } from "../errors.ts";
 import type { Logger } from "../logger.server.ts";
 import { clientIp } from "../session.server.ts";
 
@@ -83,17 +85,70 @@ export interface DisclosureRecord {
 /**
  * 開示請求・捜査関係事項照会に答えるための取り出し。
  *
- * ★呼ぶ前に必ず管理者であることを確かめること。★
- * ★引いた事実そのものを audit_logs に残すこと。★ 誰がいつ誰の発信者情報を
- * 見たかが残らないと、内部の濫用を後から検証できない。
+ * ★記録を «呼ぶ側の責任» にしない。★
+ *
+ * 以前ここには「引いた事実を audit_logs に残すこと」と書いてあったが、
+ * ★書いてあるだけで、呼ぶ側は1つも存在しなかった★（2026-08-25 の
+ * 公開前監査で発覚）。プライバシーポリシーには
+ * 「参照した事実は記録に残します」と書いてある。
+ * 約束を注意書きで守ろうとすると、こうなる。
+ *
+ * いまは記録を関数の中に入れてある。★復号する前に記録する。★
+ * 記録に失敗したら復号もしない（例外がそのまま出る）。
+ * つまり「記録の無い参照」は起こりえない。
+ *
+ * 理由（reason）を必須にしているのは、あとから判断の当否を
+ * 検証できるようにするため。誰が・いつ・誰のぶんを・なぜ見たか。
  */
+export interface DisclosureActor {
+  /** 引いた管理者。監査の主語になる */
+  readonly adminId: string;
+  /** なぜ引いたか。空文字は受け付けない */
+  readonly reason: string;
+  readonly request?: Request;
+}
+
+function requireReason(actor: DisclosureActor): string {
+  const reason = actor.reason.trim();
+  if (reason === "") {
+    throw new AppError("validation_failed", "理由を入力してください。", {
+      detail: "disclosure requested without reason",
+      fields: { reason: "理由は必須です" },
+    });
+  }
+  return reason.slice(0, 500);
+}
+
 export async function disclosureForUser(options: {
   db: Db;
   env: AppEnv;
   userId: string;
+  actor: DisclosureActor;
   limit?: number;
 }): Promise<DisclosureRecord[]> {
-  const { db, env, userId } = options;
+  const { db, env, userId, actor } = options;
+  const reason = requireReason(actor);
+
+  /*
+   * ★復号より先に記録する。★ 後にすると、途中で落ちたときに
+   * 「見たのに記録が無い」が作れる。
+   */
+  await writeAdminAction(db, {
+    adminId: actor.adminId,
+    actionType: "disclosure_view",
+    targetType: "user",
+    targetId: userId,
+    reason,
+  });
+  await writeAuditLog(db, env, {
+    action: "admin.disclosure_viewed",
+    actorId: actor.adminId,
+    actorRole: "admin",
+    targetType: "user",
+    targetId: userId,
+    request: actor.request,
+  });
+
   const key = requireSecret(env, "ACCESS_LOG_KEY");
 
   const rows = await db
@@ -122,14 +177,36 @@ export async function disclosureForUser(options: {
   );
 }
 
-/** 特定の投稿・メッセージ・通報が、どこから行われたか */
+/**
+ * 特定の投稿・メッセージ・通報が、どこから行われたか。
+ * disclosureForUser と同じく、★復号する前に記録する★。
+ */
 export async function disclosureForTarget(options: {
   db: Db;
   env: AppEnv;
   targetType: string;
   targetId: string;
+  actor: DisclosureActor;
 }): Promise<DisclosureRecord[]> {
-  const { db, env, targetType, targetId } = options;
+  const { db, env, targetType, targetId, actor } = options;
+  const reason = requireReason(actor);
+
+  await writeAdminAction(db, {
+    adminId: actor.adminId,
+    actionType: "disclosure_view",
+    targetType,
+    targetId,
+    reason,
+  });
+  await writeAuditLog(db, env, {
+    action: "admin.disclosure_viewed",
+    actorId: actor.adminId,
+    actorRole: "admin",
+    targetType,
+    targetId,
+    request: actor.request,
+  });
+
   const key = requireSecret(env, "ACCESS_LOG_KEY");
 
   const rows = await db

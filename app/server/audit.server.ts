@@ -83,6 +83,7 @@ export async function writeAdminAction(
       | "payment_refund"
       | "report_resolve"
       | "thread_view"
+      | "disclosure_view"
       | "banned_word_add"
       | "banned_word_remove";
     targetType: string;

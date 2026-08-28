@@ -107,6 +107,12 @@ export const adminActionTypeEnum = pgEnum("admin_action_type", [
   "payment_refund",
   "report_resolve",
   "thread_view",
+  /**
+   * 発信者情報（復号できるIPアドレス）を取り出した。
+   * ★プライバシーポリシーで「参照した事実は記録に残します」と
+   * 約束している当のもの。★
+   */
+  "disclosure_view",
   "banned_word_add",
   "banned_word_remove",
 ]);

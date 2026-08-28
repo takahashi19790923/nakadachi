@@ -33,6 +33,11 @@ export function meta(): Route.MetaDescriptors {
 const ADMIN_LINKS = [
   { to: "/admin/listings", label: "投稿一覧", description: "公開・非公開の切り替え" },
   { to: "/admin/reports", label: "通報一覧", description: "未対応の通報" },
+  {
+    to: "/admin/disclosure",
+    label: "発信者情報の取り出し",
+    description: "開示請求・捜査関係事項照会への対応（引いた事実は記録に残る）",
+  },
   { to: "/admin/users", label: "ユーザー一覧", description: "利用停止・復帰" },
   { to: "/admin/payments", label: "決済状況", description: "支払い・返金" },
   { to: "/admin/banned-words", label: "禁止ワード管理", description: "遮断・要確認" },
