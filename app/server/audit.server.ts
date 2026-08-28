@@ -38,13 +38,28 @@ export async function writeAuditLog(
     }
   }
 
+  /*
+   * ★列の幅に収まらない値で、本処理を落とさない。★
+   *
+   * 2026-08-28、ログインの失敗記録に 64文字の HMAC をそのまま渡して
+   * target_id（varchar(40)）を溢れさせた。結果、★ログインの «失敗» が
+   * 500 になった★ —— 記録のための処理が、記録したかった操作そのものを
+   * 壊す形。しかも「拒否」も「サーバーエラー」も利用者から見れば
+   * 「入れない」なので、気づくのが遅れる。
+   *
+   * ここで切る。ID やハッシュは先頭だけでも突き合わせに足りる。
+   * 幅は app/db/schema/ops.ts の auditLogs と揃えること。
+   */
+  const fit = (value: string | null | undefined, max: number): string | null =>
+    value == null ? null : value.slice(0, max);
+
   await db.insert(auditLogs).values({
     id: ulid(),
-    actorId: options.actorId ?? null,
-    actorRole: options.actorRole ?? null,
-    action: options.action,
-    targetType: options.targetType ?? null,
-    targetId: options.targetId ?? null,
+    actorId: fit(options.actorId, 40),
+    actorRole: fit(options.actorRole, 20),
+    action: options.action.slice(0, 60),
+    targetType: fit(options.targetType, 32),
+    targetId: fit(options.targetId, 40),
     ipHash,
     metadata: options.metadata ?? null,
   });

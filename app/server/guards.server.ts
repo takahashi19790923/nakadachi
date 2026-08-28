@@ -3,6 +3,7 @@ import { redirect } from "react-router";
 import type { AppContext } from "./app-context.ts";
 
 import { hasValidGate } from "./admin-gate.server.ts";
+import { writeAuditLog } from "./audit.server.ts";
 import { forbidden, notFound } from "./errors.ts";
 import { getSessionUser, type SessionUser } from "./session.server.ts";
 
@@ -80,6 +81,23 @@ export async function requireUser(args: GuardArgs): Promise<SessionUser> {
 export async function requireAdmin(args: GuardArgs): Promise<SessionUser> {
   const user = await loadUser(args);
   if (!user || user.role !== "admin") {
+    /*
+     * ★管理画面を叩かれたことは必ず残す。★
+     *
+     * 利用者向けの画面で他人のものを触られたとき（assertOwner の 404）は
+     * 記録しない。誤操作や古いリンクで日常的に起きるうえ、件数を
+     * 攻撃者が決められるので、永久保存の表が埋まる。
+     * 管理画面への未認可のアクセスは「日常的には起きないはず」のもので、
+     * 起きたら知りたい。件数も URL を知っている相手に限られる。
+     */
+    await writeAuditLog(args.context.getDb(), args.context.env, {
+      action: "authz.denied",
+      actorId: user?.id ?? null,
+      actorRole: user?.role ?? "anonymous",
+      targetType: "admin_route",
+      targetId: new URL(args.request.url).pathname.slice(0, 120),
+      request: args.request,
+    });
     throw notFound("admin route accessed without admin role");
   }
   return user;

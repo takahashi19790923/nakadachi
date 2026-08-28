@@ -472,6 +472,9 @@ describe("★定期処理が入口から実際に走る★", () => {
       "pruneBackups",
       "purgeAccessRecords",
       "purgeAccounts",
+      // 認証まわりの監査ログ（auth.* / authz.*）だけを180日で消す。
+      // 監査ログ全体は消さない（2026-08-28 に追加）。
+      "purgeAuthAuditLogs",
       "purgeDeletedImages",
       "purgeEmailLogs",
       "purgeEndedListings",

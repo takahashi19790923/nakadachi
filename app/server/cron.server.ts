@@ -19,6 +19,7 @@ import { reconcilePayments } from "./services/payment/reconcile-service.server.t
 import {
   markEndedListingImages,
   purgeEndedListings,
+  purgeOldAuthAuditLogs,
   purgeOldEmailLogs,
   purgeOldPayments,
   purgeOldWebhookEvents,
@@ -166,6 +167,14 @@ async function runDaily(
     purgeOldWebhookEvents(db),
   );
   await runTask("purgeEmailLogs", logger, result, () => purgeOldEmailLogs(db));
+  /*
+   * ★監査ログ全体は消さない。★ auth.* / authz.* だけ180日で消す。
+   * ログインの失敗は攻撃者が件数を決められるので、永久保存の表へ
+   * 無制限に溜めると保管費用が攻撃手段になる。
+   */
+  await runTask("purgeAuthAuditLogs", logger, result, () =>
+    purgeOldAuthAuditLogs(db),
+  );
   await runTask("purgeResolvedReports", logger, result, () =>
     purgeResolvedReports(db),
   );
