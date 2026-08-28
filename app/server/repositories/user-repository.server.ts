@@ -8,7 +8,11 @@ import {
   users,
 } from "~/db/schema/index.ts";
 import { ulid } from "~/domain/ulid.ts";
-import { decryptString, encryptString } from "../crypto.server.ts";
+import {
+  decryptString,
+  emailCanonicalHmac as emailCanonicalHmacOf,
+  encryptString,
+} from "../crypto.server.ts";
 import type { Db } from "../db.server.ts";
 import { requireSecret, type AppEnv } from "../env.server.ts";
 
@@ -57,6 +61,14 @@ export async function createUser(
 ): Promise<UserRecord> {
   const encryptionKey = requireSecret(env, "EMAIL_ENCRYPTION_KEY");
   const emailEncrypted = await encryptString(encryptionKey, options.email);
+  /*
+   * ★「同じ受信箱か」の索引も一緒に作る。★ 本人確認は emailHmac のまま。
+   * こちらは停止の回避防止と回数の数え上げに使う（crypto.server.ts）。
+   */
+  const emailCanonicalHmac = await emailCanonicalHmacOf(
+    requireSecret(env, "EMAIL_INDEX_KEY"),
+    options.email,
+  );
   const id = ulid();
 
   await db.transaction(async (tx) => {
@@ -64,6 +76,7 @@ export async function createUser(
       id,
       emailEncrypted,
       emailHmac: options.emailHmac,
+      emailCanonicalHmac,
       role: options.role ?? "user",
     });
     await tx.insert(userProfiles).values({
@@ -281,4 +294,34 @@ export async function countUsers(db: Db): Promise<number> {
     .from(users)
     .where(isNull(users.deletedAt));
   return rows[0]?.count ?? 0;
+}
+
+/**
+ * 同じ受信箱に届くアドレスで、停止されたアカウントがあるか。
+ *
+ * ★本人確認ではない。★ 「この受信箱の持ち主は止められているか」を見る。
+ * 詐欺などで利用停止にした相手が、点や +タグを足して再登録するのを防ぐ。
+ *
+ * ★止めた側からは、回避されたことが見えない。★ 新しいアカウントは
+ * 正常に作られ、どこにもエラーが出ない。だからここで塞ぐ。
+ *
+ * 一意制約ではなく検索にしているのは、同一視の目的が「数える・止める」で
+ * あって「同一人物と断定する」ではないため。断定に使うと、正規化を
+ * 間違えたときに無関係な人を締め出す。
+ */
+export async function hasSuspendedAccountForInbox(
+  db: Db,
+  canonicalHmac: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        eq(users.emailCanonicalHmac, canonicalHmac),
+        eq(users.status, "suspended"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 }
