@@ -301,7 +301,11 @@ export function accountDeletionEmail(options: {
  * 件名を日本語にしていないのは、受信箱で絞り込みやすくするため。
  */
 export function opsPaymentAlertEmail(options: {
-  kind: "paid_not_published" | "refunded_but_live" | "failed_webhooks";
+  kind:
+    | "paid_not_published"
+    | "refunded_but_live"
+    | "failed_webhooks"
+    | "webhook_never_arrived";
   listingTitle: string;
   listingStatus: string;
   adminUrl: string;
@@ -311,13 +315,17 @@ export function opsPaymentAlertEmail(options: {
       ? "決済は成立したが掲載が出ていない"
       : options.kind === "refunded_but_live"
         ? "返金済みなのに掲載が続いている"
-        : "処理できていない決済通知がある";
+        : options.kind === "webhook_never_arrived"
+          ? "★Stripe からの通知が届いていない★"
+          : "処理できていない決済通知がある";
   const detail =
     options.kind === "paid_not_published"
       ? "利用者は110円を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。"
       : options.kind === "refunded_but_live"
         ? "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。"
-        : "Stripe からの通知を受け取ったのに処理を終えられていないものがあります。Stripe には 200 を返しているので再送されず、投稿側にも痕跡が残らない場合があります（決済記録の作成に失敗した Session など）。payment_webhook_events を確認してください。";
+        : options.kind === "webhook_never_arrived"
+          ? "Checkout Session の期限を過ぎたのに、成立の通知も失効の通知も届いていません。Stripe は期限が来れば必ずどちらかを送るので、★通知の経路そのものが切れている疑いが濃厚です★（送信先の未作成・URL の誤り・署名シークレットの不一致）。この状態では、支払いが済んでいても掲載は出ず、他のどの警報にも掛かりません。Stripe ダッシュボードの「Webhook」で送信先と直近の応答コードを確認してください。"
+          : "Stripe からの通知を受け取ったのに処理を終えられていないものがあります。Stripe には 200 を返しているので再送されず、投稿側にも痕跡が残らない場合があります（決済記録の作成に失敗した Session など）。payment_webhook_events を確認してください。";
 
   const { html, text } = layout({
     heading,
