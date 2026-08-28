@@ -39,8 +39,15 @@ import {
  *  - ★同じ Webhook を二度処理しない。★ event_id の一意制約で判定する
  */
 
-/** Checkout Session の有効期間。放置された決済待ちを下書きへ戻す判断に使う */
-const SESSION_TTL_MINUTES = 60;
+/**
+ * Checkout Session の有効期間。放置された決済待ちを下書きへ戻す判断に使う。
+ *
+ * ★突き合わせ（reconcile-service）もこの値を見ている。★ Stripe は Session が
+ * 切れた時点で必ず checkout.session.expired を送ってくるので、これを過ぎても
+ * created のままの決済は「通知が1件も届いていない」ことの証拠になる。
+ * ここを伸ばしたら検知の猶予も一緒に伸びる（別々に持たない）。
+ */
+export const SESSION_TTL_MINUTES = 60;
 
 export interface CheckoutStartResult {
   readonly redirectUrl: string;

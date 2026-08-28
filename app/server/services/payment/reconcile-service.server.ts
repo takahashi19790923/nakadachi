@@ -5,6 +5,7 @@ import type { AppEnv } from "../../env.server.ts";
 import type { Logger } from "../../logger.server.ts";
 import { sendEmail } from "../email/email-service.server.ts";
 import { opsPaymentAlertEmail } from "../email/templates.server.ts";
+import { SESSION_TTL_MINUTES } from "./payment-service.server.ts";
 
 /**
  * 決済と掲載の突き合わせ。
@@ -28,10 +29,22 @@ import { opsPaymentAlertEmail } from "../email/templates.server.ts";
 /** 決済成立からこれだけ経っても公開されていなければ異常とみなす */
 const GRACE_MINUTES = 60;
 
+/**
+ * Session が切れてから、expired の通知を待つ猶予。
+ *
+ * Stripe は Session の期限が来た時点で checkout.session.expired を送るが、
+ * 送信は即時ではなく、再送も挟まる。短すぎると正常な放置で鳴る。
+ */
+const WEBHOOK_LAG_GRACE_MINUTES = 30;
+
 export interface PaymentAnomaly {
-  readonly kind: "paid_not_published" | "refunded_but_live";
+  readonly kind:
+    | "paid_not_published"
+    | "refunded_but_live"
+    | "webhook_never_arrived";
   readonly paymentId: string;
-  readonly listingId: string;
+  /** 投稿が消えている決済もありうる（退会で参照が外れる）。それでも警報は出す */
+  readonly listingId: string | null;
   readonly listingTitle: string;
   readonly listingStatus: string;
 }
@@ -44,12 +57,33 @@ export interface PaymentAnomaly {
  * status だけを見ると取り残しと区別がつかない。
  */
 export async function findPaymentAnomalies(db: Db): Promise<PaymentAnomaly[]> {
+  /*
+   * ★3つめは「Webhook が1件も届かない」を見る。★
+   *
+   * 上の2つも countFailedWebhooks も、★通知が届いていることを前提にしている★。
+   * 届いた通知が失敗した／処理の途中で止まった、は拾えるが、
+   * ★送信先そのものが無い・URL が違う・鍵が違う場合は、行が1つも作られない★
+   * ので、どの検査にも掛からない。決済は Stripe 側で成立し、投稿は
+   * payment_pending のまま、警報は鳴らない。
+   *
+   * 2026-08-29 に preview で実際に起きた（サンドボックスに送信先が未作成）。
+   * 本番で同じことが起きれば「お金は取られたが掲載は出ず、誰も気づかない」。
+   *
+   * 判定の根拠：Stripe は Session の期限が来れば必ず
+   * checkout.session.expired を送る。受け取れば status は expired になる。
+   * ★期限＋猶予を過ぎてなお created なら、通知が届いていない。★
+   *
+   * pending は対象外。あれは「completed は届いたが入金がまだ」（後払い）で、
+   * 通知は届いている。コンビニ払いなら数日 pending のままが正常。
+   */
+  const staleMinutes = SESSION_TTL_MINUTES + WEBHOOK_LAG_GRACE_MINUTES;
+
   const rows = await db.execute<{
     kind: string;
     payment_id: string;
-    listing_id: string;
-    title: string;
-    status: string;
+    listing_id: string | null;
+    title: string | null;
+    status: string | null;
   }>(sql`
     select 'paid_not_published' as kind,
            p.id as payment_id, l.id as listing_id, l.title, l.status
@@ -67,14 +101,28 @@ export async function findPaymentAnomalies(db: Db): Promise<PaymentAnomaly[]> {
     join listings l on l.id = p.listing_id
     where p.status = 'refunded'
       and l.status = 'published'
+
+    union all
+
+    /*
+     * ★left join にする。★ 投稿が消えていても警報は出す。
+     * 決済記録は退会しても残る（listing_id は set null）ので、
+     * inner join にすると「痕跡がいちばん残っていない決済」だけが漏れる。
+     */
+    select 'webhook_never_arrived' as kind,
+           p.id as payment_id, l.id as listing_id, l.title, l.status
+    from payments p
+    left join listings l on l.id = p.listing_id
+    where p.status = 'created'
+      and p.created_at <= now() - make_interval(mins => ${staleMinutes})
   `);
 
   return rows.rows.map((row) => ({
     kind: row.kind as PaymentAnomaly["kind"],
     paymentId: row.payment_id,
     listingId: row.listing_id,
-    listingTitle: row.title,
-    listingStatus: row.status,
+    listingTitle: row.title ?? "（投稿は残っていません）",
+    listingStatus: row.status ?? "—",
   }));
 }
 
@@ -132,6 +180,9 @@ export async function reconcilePayments(options: {
         .length,
       refundedButLive: anomalies.filter((a) => a.kind === "refunded_but_live")
         .length,
+      webhookNeverArrived: anomalies.filter(
+        (a) => a.kind === "webhook_never_arrived",
+      ).length,
       failedWebhooks,
     },
   );
@@ -181,7 +232,7 @@ export async function reconcilePayments(options: {
           adminUrl: new URL("/admin/payments", env.APP_ORIGIN).toString(),
         }),
         idempotencyKey: `ops_payment_alert:${anomaly.kind}:${anomaly.paymentId}`,
-        listingId: anomaly.listingId,
+        listingId: anomaly.listingId ?? undefined,
       },
       { db, env, logger },
     ).catch((error: unknown) => {
