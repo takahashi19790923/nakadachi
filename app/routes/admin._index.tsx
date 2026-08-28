@@ -6,7 +6,10 @@ import { requireAdminGate } from "~/server/guards.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
 import { countOpenReports } from "~/server/repositories/moderation-repository.server";
 import { countListingsByStatus } from "~/server/services/listing-service.server";
-import { countFailedWebhooks } from "~/server/services/payment/reconcile-service.server";
+import {
+  countFailedWebhooks,
+  findPaymentAnomalies,
+} from "~/server/services/payment/reconcile-service.server";
 import type { Route } from "./+types/admin._index";
 import { getApp } from "~/server/app-context";
 
@@ -15,15 +18,29 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
   await requireAdminGate({ request, context });
   const db = context.getDb();
 
-  const [listingCounts, userCount, openReports, failedWebhooks] =
+  const [listingCounts, userCount, openReports, failedWebhooks, anomalies] =
     await Promise.all([
       countListingsByStatus(db),
       countUsers(db),
       countOpenReports(db),
       countFailedWebhooks(db),
+      /*
+       * ★件数だけの軽い問い合わせを別に作らない。★ 作れば閾値が2か所に
+       * 増え、片方だけ直した日に画面と警報メールが食い違う。
+       * ここは管理者しか開かないので、突き合わせ本体をそのまま使う。
+       */
+      findPaymentAnomalies(db),
     ]);
 
-  return { listingCounts, userCount, openReports, failedWebhooks };
+  return {
+    listingCounts,
+    userCount,
+    openReports,
+    failedWebhooks,
+    webhookNeverArrived: anomalies.filter(
+      (a) => a.kind === "webhook_never_arrived",
+    ).length,
+  };
 }
 
 export function meta(): Route.MetaDescriptors {
@@ -50,7 +67,13 @@ const ADMIN_LINKS = [
 ];
 
 export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
-  const { listingCounts, userCount, openReports, failedWebhooks } = loaderData;
+  const {
+    listingCounts,
+    userCount,
+    openReports,
+    failedWebhooks,
+    webhookNeverArrived,
+  } = loaderData;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -62,6 +85,28 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
         画面では成功に見える。ここに出さないと「110円は受け取ったが
         掲載が出ていない」が誰にも分からないまま残る。
       */}
+      {/*
+        ★これがいちばん重い。★ 上の「失敗した通知」は、通知が届いている
+        ことが前提になっている。届いていない場合は payment_webhook_events に
+        行が1つも作られないので、どの件数にも出ない。
+        送信先の未作成・URL の誤り・署名シークレットの不一致がこれに当たる。
+      */}
+      {webhookNeverArrived > 0 ? (
+        <p className="mt-4 rounded-lg border-2 border-red-600 bg-red-50 p-4 font-bold text-red-900">
+          ★Stripe からの通知が届いていない可能性があります。★ 期限を過ぎても
+          成立・失効のどちらの通知も来ていない決済が {webhookNeverArrived}{" "}
+          件あります。
+          <span className="mt-1 block font-normal">
+            この状態では、支払い済みでも掲載は出ません。Stripe
+            ダッシュボードの「Webhook」で、送信先の URL
+            と直近の応答コードを確認してください。
+          </span>
+          <Link to="/admin/payments" className="link">
+            決済状況を確認する
+          </Link>
+        </p>
+      ) : null}
+
       {failedWebhooks > 0 ? (
         <p className="mt-4 rounded-lg border-2 border-kaki-500 bg-kaki-50 p-4 font-bold text-kaki-900">
           処理できなかった決済通知が {failedWebhooks} 件あります。
