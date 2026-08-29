@@ -244,13 +244,6 @@ export default function Privacy() {
         Cookie を発行することがあります。詳しくは
         「お客様の端末から外部へ送信される情報」をご覧ください。
       </p>
-      <p>
-        Cookie の詳細な取扱いは
-        <a className="link mx-1" href={SITE.legal.cookiesUrl} rel="noopener noreferrer">
-          Cookieポリシー
-        </a>
-        をご覧ください。
-      </p>
 
       <h2>6. 保存期間と削除</h2>
       <ul>

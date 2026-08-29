@@ -48,15 +48,6 @@ export function SiteFooter() {
               </Link>
             </li>
             <li>
-              <a
-                className="link"
-                href={SITE.legal.cookiesUrl}
-                rel="noopener noreferrer"
-              >
-                Cookieポリシー
-              </a>
-            </li>
-            <li>
               <Link className="link" to="/legal/tokushoho">
                 特定商取引法に基づく表記
               </Link>
