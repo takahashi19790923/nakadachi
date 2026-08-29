@@ -33,11 +33,18 @@ export async function listListingsForAdmin(
       createdAt: listings.createdAt,
       publishedAt: listings.publishedAt,
       /*
-       * ★古い行は closed_at が入っていない。★ この列を停止・却下でも
-       * 入れるようにしたのは 2026-08-29 で、それ以前に止めたものは null。
-       * 保持期間の掃除と同じ順で読み替える（closed_at → updated_at）。
+       * ★経過日数は SQL で数える。★
+       *
+       * 時刻をそのまま返させると、この driver は Date ではなく
+       * ★規格外の文字列★ を返す（"2026-08-15 15:51:22.171+00"）。
+       * V8 はいま解釈できるが、規格に無い書式なので保証が無い。
+       * 解釈に失敗すると日数が 0 になり、★警報が静かに鳴らなくなる★
+       * ── 気づくための仕組みが、黙って死ぬ形。数えるのは DB に任せる。
+       *
+       * 古い行は closed_at が無いので、保持期間の掃除と同じ順で
+       * 読み替える（closed_at → updated_at）。
        */
-      endedAt: sql<Date>`coalesce(${listings.closedAt}, ${listings.updatedAt})`,
+      endedDaysAgo: sql<number>`extract(day from now() - coalesce(${listings.closedAt}, ${listings.updatedAt}))::int`,
       moderationReason: listings.moderationReason,
     })
     .from(listings)

@@ -2,11 +2,7 @@ import { Link } from "react-router";
 
 import { StatusBadge } from "~/components/ui";
 import { formatDateTimeJa } from "~/domain/listing-view";
-import {
-  daysSince,
-  ENDED_LISTING_STATUSES,
-  SUSPENDED_REVIEW_DAYS,
-} from "~/domain/retention";
+import { ENDED_LISTING_STATUSES, SUSPENDED_REVIEW_DAYS } from "~/domain/retention";
 import {
   LISTING_STATUSES,
   LISTING_STATUS_LABEL,
@@ -35,11 +31,10 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
       status: row.status,
       ownerName: row.ownerName ?? "（退会）",
       createdAt: row.createdAt.toISOString(),
-      // 掲載が見えなくなった時刻（closed_at、無ければ updated_at）
-      endedAt: new Date(row.endedAt).toISOString(),
+      // 掲載が見えなくなってからの日数。DB が数えたものをそのまま使う
+      endedDaysAgo: row.endedDaysAgo,
       moderationReason: row.moderationReason,
     })),
-    now: new Date().toISOString(),
   };
 }
 
@@ -48,8 +43,7 @@ export function meta(): Route.MetaDescriptors {
 }
 
 export default function AdminListings({ loaderData }: Route.ComponentProps) {
-  const { listings, status, now } = loaderData;
-  const nowDate = new Date(now);
+  const { listings, status } = loaderData;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -100,13 +94,13 @@ export default function AdminListings({ loaderData }: Route.ComponentProps) {
                 <span
                   className={
                     listing.status === "suspended" &&
-                    daysSince(listing.endedAt, nowDate) >= SUSPENDED_REVIEW_DAYS
+                    listing.endedDaysAgo >= SUSPENDED_REVIEW_DAYS
                       ? "rounded bg-red-100 px-2 py-0.5 text-sm font-bold text-red-900"
                       : "text-sm text-washi-600"
                   }
                 >
                   {listing.status === "suspended" ? "停止から" : "終了から"}
-                  {daysSince(listing.endedAt, nowDate)}日
+                  {listing.endedDaysAgo}日
                 </span>
               ) : null}
             </div>

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { RouterContextProvider } from "react-router";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -8,6 +8,11 @@ import { issueGateCookie } from "~/server/admin-gate.server";
 import { appContext, type AppContext } from "~/server/app-context";
 import { csrfCookieName, issueCsrfToken } from "~/server/csrf.server";
 import type { Db } from "~/server/db.server";
+import { SUSPENDED_REVIEW_DAYS } from "~/domain/retention";
+import {
+  countSuspendedNeedingReview,
+  listListingsForAdmin,
+} from "~/server/repositories/admin-repository.server";
 import { getPublishedListing, searchListings } from "~/server/repositories/listing-repository.server";
 import { createReport } from "~/server/repositories/moderation-repository.server";
 import {
@@ -157,6 +162,88 @@ async function makePublished(ownerId: string): Promise<string> {
     expiresAt: new Date(Date.now() + 30 * 86_400_000),
   });
 }
+
+// ── 停止したまま放置されたものを見つける ──────────────────────────
+
+/**
+ * ★経過日数は DB に数えさせる。★
+ *
+ * 時刻をそのまま返させると、この driver は Date ではなく規格外の文字列を
+ * 返す（"2026-08-15 15:51:22.171+00"）。V8 はいま解釈できるが規格には無い。
+ * 解釈に失敗すると日数が 0 になり、★警報が静かに鳴らなくなる★。
+ * 気づくための仕組みが黙って死ぬので、数えるのは DB に任せている。
+ *
+ * ここでは «数値で返ること» と «実際の日数と合うこと» の両方を見る。
+ * 型だけ見て 0 を返していても «数値» なので、値まで確かめないと意味がない。
+ */
+describe("★停止したまま放置されたものを見つける★", () => {
+  async function suspendedDaysAgo(days: number): Promise<string> {
+    const listingId = await makePublished(owner.id);
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "検査のため停止しています" },
+    });
+    await db.execute(sql`
+      update listings set closed_at = now() - make_interval(days => ${days})
+      where id = ${listingId}
+    `);
+    return listingId;
+  }
+
+  it("経過日数が数値で、実際の日数と合う", async () => {
+    await suspendedDaysAgo(120);
+
+    const rows = await listListingsForAdmin(db, { status: "suspended" });
+    expect(rows).toHaveLength(1);
+    expect(typeof rows[0]!.endedDaysAgo).toBe("number");
+    expect(rows[0]!.endedDaysAgo).toBe(120);
+  });
+
+  it(`目安（${SUSPENDED_REVIEW_DAYS}日）を過ぎたものを数える`, async () => {
+    await suspendedDaysAgo(SUSPENDED_REVIEW_DAYS + 10);
+    await suspendedDaysAgo(SUSPENDED_REVIEW_DAYS + 30);
+
+    const result = await countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS);
+    expect(result.count).toBe(2);
+    expect(result.oldestDays).toBe(SUSPENDED_REVIEW_DAYS + 30);
+  });
+
+  it("★まだ日が浅い停止は数えない★", async () => {
+    // 止めた直後から鳴ると、対応中の案件で毎回鳴って読まれなくなる。
+    await suspendedDaysAgo(SUSPENDED_REVIEW_DAYS - 1);
+
+    const result = await countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS);
+    expect(result.count).toBe(0);
+    expect(result.oldestDays).toBe(0);
+  });
+
+  it("停止以外は数えない（掲載終了・却下を含む）", async () => {
+    const closedId = await makePublished(owner.id);
+    await db.execute(sql`
+      update listings set status = 'closed', closed_at = now() - interval '400 days'
+      where id = ${closedId}
+    `);
+    const rejectedId = await makePublished(owner.id);
+    await db.execute(sql`
+      update listings set status = 'rejected', closed_at = now() - interval '400 days'
+      where id = ${rejectedId}
+    `);
+
+    const result = await countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS);
+    expect(result.count).toBe(0);
+  });
+
+  it("削除済みは数えない", async () => {
+    const listingId = await suspendedDaysAgo(400);
+    await db.execute(sql`
+      update listings set deleted_at = now() where id = ${listingId}
+    `);
+
+    const result = await countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS);
+    expect(result.count).toBe(0);
+  });
+});
 
 // ── 停止した時刻 ──────────────────────────────────────────────────
 
