@@ -3,6 +3,8 @@ import { Link } from "react-router";
 import { ADMIN_STATUS_TILES, LISTING_STATUS_LABEL } from "~/domain/listing-status";
 import { privatePageMeta } from "~/domain/seo";
 import { requireAdminGate } from "~/server/guards.server";
+import { SUSPENDED_REVIEW_DAYS } from "~/domain/retention";
+import { countSuspendedNeedingReview } from "~/server/repositories/admin-repository.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
 import { countOpenReports } from "~/server/repositories/moderation-repository.server";
 import { countListingsByStatus } from "~/server/services/listing-service.server";
@@ -18,8 +20,14 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
   await requireAdminGate({ request, context });
   const db = context.getDb();
 
-  const [listingCounts, userCount, openReports, failedWebhooks, anomalies] =
-    await Promise.all([
+  const [
+    listingCounts,
+    userCount,
+    openReports,
+    failedWebhooks,
+    anomalies,
+    staleSuspended,
+  ] = await Promise.all([
       countListingsByStatus(db),
       countUsers(db),
       countOpenReports(db),
@@ -30,6 +38,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
        * ここは管理者しか開かないので、突き合わせ本体をそのまま使う。
        */
       findPaymentAnomalies(db),
+      countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS),
     ]);
 
   return {
@@ -40,6 +49,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
     webhookNeverArrived: anomalies.filter(
       (a) => a.kind === "webhook_never_arrived",
     ).length,
+    staleSuspended,
   };
 }
 
@@ -73,6 +83,7 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
     openReports,
     failedWebhooks,
     webhookNeverArrived,
+    staleSuspended,
   } = loaderData;
 
   return (
@@ -113,6 +124,27 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
           支払い済みなのに公開されていない投稿がある可能性があります。
           <Link to="/admin/payments" className="link ml-2">
             決済状況を確認する
+          </Link>
+        </p>
+      ) : null}
+
+      {/*
+        ★停止したままの投稿は、自動では消えない。★ 係争の経緯を残すため
+        保持期間の対象から外してある（retention.ts）。代わりに、対応が
+        終わっているなら人が削除する決まりになっている。
+        ★その «人が覚えている» を当てにしない。★ ここに出す。
+      */}
+      {staleSuspended.count > 0 ? (
+        <p className="mt-4 rounded-lg border border-washi-300 bg-washi-50 p-4 text-washi-900">
+          停止したまま {SUSPENDED_REVIEW_DAYS} 日を過ぎた投稿が{" "}
+          {staleSuspended.count} 件あります（最長 {staleSuspended.oldestDays} 日）。
+          <span className="mt-1 block text-sm">
+            停止した投稿は<strong>自動では削除されません</strong>。
+            対応が終わっているなら削除してください（削除から180日で本文も消えます）。
+            対応中ならそのままで構いません。
+          </span>
+          <Link to="/admin/listings?status=suspended" className="link">
+            停止中の投稿を見る
           </Link>
         </p>
       ) : null}
