@@ -73,9 +73,50 @@ export const ABANDONED_DRAFT_RETENTION_DAYS = 180;
  * ものが入る。係争中の内容を先に消すと、あとから経緯を追えなくなる。
  * 消したい場合は管理画面から deleted にする（そこから180日で消える）。
  */
+/**
+ * ある時刻からの経過日数。
+ *
+ * ★now を必ず渡せるようにする。★ 渡せないと、検査が実行した日に
+ * 依存して落ちるようになる（境界の1日ぶんが日替わりでずれる）。
+ */
+export function daysSince(at: Date | string, now: Date): number {
+  const from = typeof at === "string" ? new Date(at) : at;
+  if (Number.isNaN(from.getTime())) return 0;
+  return Math.floor((now.getTime() - from.getTime()) / 86_400_000);
+}
+
+/**
+ * 停止したままこれを過ぎたら、管理画面で目に付くようにする日数。
+ *
+ * ★自動削除はしない。★ 係争が長引く案件を勝手に消さないため。
+ * 代わりに「対応は終わっていませんか」と人へ出す。
+ *
+ * 90日にしているのは、終わった掲載の写真が消える節目と同じにするため。
+ * 対応が終わっているなら管理画面から削除でき（そこから180日で本文も消える）、
+ * 終わっていないなら何もしなくてよい。
+ */
+export const SUSPENDED_REVIEW_DAYS = 90;
+
 export const ENDED_LISTING_STATUSES = [
   "closed",
   "expired",
   "deleted",
   "rejected",
 ] as const satisfies readonly ListingStatus[];
+
+/**
+ * 停止したまま放置されていないか。
+ *
+ * ★停止は自動では消えない。★ 人が「対応が終わった」と判断して削除するまで
+ * 残り続ける。判断する人がそれを覚えている前提の運用は成り立たないので、
+ * 一定日数を過ぎたものを管理画面に出す。
+ */
+export function needsSuspendedReview(
+  status: ListingStatus,
+  endedAt: Date | string | null,
+  now: Date,
+): boolean {
+  if (status !== "suspended") return false;
+  if (!endedAt) return true; // 時刻が分からないものは、むしろ古い
+  return daysSince(endedAt, now) >= SUSPENDED_REVIEW_DAYS;
+}

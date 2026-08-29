@@ -3,6 +3,11 @@ import { Link } from "react-router";
 import { StatusBadge } from "~/components/ui";
 import { formatDateTimeJa } from "~/domain/listing-view";
 import {
+  daysSince,
+  ENDED_LISTING_STATUSES,
+  SUSPENDED_REVIEW_DAYS,
+} from "~/domain/retention";
+import {
   LISTING_STATUSES,
   LISTING_STATUS_LABEL,
   isListingStatus,
@@ -30,8 +35,11 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
       status: row.status,
       ownerName: row.ownerName ?? "（退会）",
       createdAt: row.createdAt.toISOString(),
+      // 掲載が見えなくなった時刻（closed_at、無ければ updated_at）
+      endedAt: new Date(row.endedAt).toISOString(),
       moderationReason: row.moderationReason,
     })),
+    now: new Date().toISOString(),
   };
 }
 
@@ -40,7 +48,8 @@ export function meta(): Route.MetaDescriptors {
 }
 
 export default function AdminListings({ loaderData }: Route.ComponentProps) {
-  const { listings, status } = loaderData;
+  const { listings, status, now } = loaderData;
+  const nowDate = new Date(now);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -81,6 +90,25 @@ export default function AdminListings({ loaderData }: Route.ComponentProps) {
               <span className="text-sm text-washi-600">
                 {listing.ownerName}・{formatDateTimeJa(listing.createdAt)}
               </span>
+              {/*
+                ★終わった掲載には «終わってから何日» を出す。★
+                停止は自動では消えないので、放置に気づく手がかりがここにしか無い。
+              */}
+              {(ENDED_LISTING_STATUSES as readonly string[]).includes(
+                listing.status,
+              ) || listing.status === "suspended" ? (
+                <span
+                  className={
+                    listing.status === "suspended" &&
+                    daysSince(listing.endedAt, nowDate) >= SUSPENDED_REVIEW_DAYS
+                      ? "rounded bg-red-100 px-2 py-0.5 text-sm font-bold text-red-900"
+                      : "text-sm text-washi-600"
+                  }
+                >
+                  {listing.status === "suspended" ? "停止から" : "終了から"}
+                  {daysSince(listing.endedAt, nowDate)}日
+                </span>
+              ) : null}
             </div>
             <p className="mt-2 font-semibold text-washi-900">{listing.title}</p>
             {listing.moderationReason ? (

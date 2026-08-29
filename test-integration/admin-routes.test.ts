@@ -158,6 +158,80 @@ async function makePublished(ownerId: string): Promise<string> {
   });
 }
 
+// ── 停止した時刻 ──────────────────────────────────────────────────
+
+/**
+ * ★停止したのがいつかを残す。★
+ *
+ * 停止は保持期間の対象外（係争の経緯を残すため）で、人が «対応が終わった»
+ * と判断して削除する決まりになっている。その判断に «いつ止めたか» が要る。
+ *
+ * 以前は closed / expired にしか closed_at を入れておらず、
+ * ★停止は時刻をどこにも残していなかった★。却下も updated_at 頼りで、
+ * 何か更新するたび «終わった時刻» が先送りされていた。
+ */
+describe("★終わった時刻が残る★", () => {
+  it("非公開にすると closed_at が入る", async () => {
+    const listingId = await makePublished(owner.id);
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "返金されたため掲載を停止" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status, closedAt: listings.closedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("suspended");
+    expect(row!.closedAt).not.toBeNull();
+  });
+
+  it("却下でも closed_at が入る（updated_at 頼りにしない）", async () => {
+    const listingId = await makePublished(owner.id);
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "reject", reason: "禁止されている出品のため" },
+    });
+
+    const [row] = await db
+      .select({ closedAt: listings.closedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.closedAt).not.toBeNull();
+  });
+
+  it("★公開に戻しても、止めた時刻は書き換わらない★", async () => {
+    // 戻したものを «いま終わった» ことにしない。
+    const listingId = await makePublished(owner.id);
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "確認のため一時的に非公開" },
+    });
+    const [before] = await db
+      .select({ closedAt: listings.closedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "確認が終わったため公開に戻す" },
+    });
+
+    const [after] = await db
+      .select({ status: listings.status, closedAt: listings.closedAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(after!.status).toBe("published");
+    expect(after!.closedAt?.getTime()).toBe(before!.closedAt?.getTime());
+  });
+});
+
 // ── 投稿の削除 ────────────────────────────────────────────────────
 
 /**

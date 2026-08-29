@@ -310,7 +310,25 @@ export async function transitionListing(
       values.expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
     }
   }
-  if (options.to === "closed" || options.to === "expired") {
+  /*
+   * ★掲載が終わった時刻を、終わり方によらず残す。★
+   *
+   * closed_at は利用者には出していない。保持期間の掃除が
+   * coalesce(closed_at, deleted_at, updated_at) で読むための列で、
+   * 意味は「掲載が見えなくなった時刻」。
+   *
+   * 以前は closed / expired にしか入れていなかったので、
+   *  - rejected は updated_at に頼っていた（何か更新するたび先送りされる）
+   *  - ★suspended は時刻をどこにも残していなかった★
+   * 停止は保持期間の対象外（係争の経緯を残すため）で、人が判断して
+   * 削除する決まりになっている。その判断に「いつ止めたか」が要る。
+   */
+  if (
+    options.to === "closed" ||
+    options.to === "expired" ||
+    options.to === "suspended" ||
+    options.to === "rejected"
+  ) {
     values.closedAt = now;
   }
   if (options.to === "suspended" || options.to === "rejected") {
