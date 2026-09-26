@@ -35,7 +35,7 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
 const PROCESSORS = [
   {
     name: "Cloudflare, Inc.",
-    data: "アプリケーションの実行、写真の保存、データベースの写しの保管、ボットの判定",
+    data: "アプリケーションの実行、写真の保存、データベースの写しの保管、ボットの判定、お問い合わせのメールの転送（Email Routing）",
     location: "日本（東京）ほか、世界各地の拠点",
   },
   {
@@ -53,11 +53,17 @@ const PROCESSORS = [
     data: "メール送信（宛先のメールアドレス、本文）",
     location: "アメリカ合衆国",
   },
+  {
+    // ★コードの宛先には現れない★ support@rewrite-co.com を Cloudflare Email Routing で運営者の Gmail へ転送している（2026-09-26 運営者の申告）
+    name: "Google LLC",
+    data: "お問い合わせのメールの受信、返信および保管（Gmail。お問い合わせフォームの内容を含みます。同社の利用規約およびプライバシーポリシーにもとづいて取り扱います）",
+    location: "アメリカ合衆国",
+  },
 ] as const;
 
 export default function Privacy() {
   return (
-    <LegalPage title="プライバシーポリシー" lastUpdated="2026年8月25日">
+    <LegalPage title="プライバシーポリシー" lastUpdated="2026年9月26日">
       <h2>1. 取得する情報</h2>
       <ul>
         <li>
@@ -85,12 +91,18 @@ export default function Privacy() {
           <strong>アクセスに関する情報</strong>：接続元IPアドレス、
           ブラウザの種類、閲覧日時。
         </li>
+        <li>
+          <strong>お問い合わせの内容</strong>：お問い合わせフォームに入力された内容
+          （返信先のメールアドレス、件名、本文）、および support@rewrite-co.com
+          とのあいだで送受信したメール（送信者名、メールアドレス、件名、日時、
+          本文、添付ファイルおよびヘッダ）。
+        </li>
       </ul>
 
       <h2>2. 保存の方法</h2>
       <ul>
         <li>
-          <strong>メールアドレスは暗号化して保存します。</strong>
+          <strong>本サービスのデータベースでは、メールアドレスは暗号化して保存します。</strong>
           検索・重複確認のためには、別の鍵で作成した一方向の索引値を用います。
         </li>
         <li>
@@ -145,7 +157,7 @@ export default function Privacy() {
       <h3>業務委託先と、国外への移転</h3>
       <p>
         サービスの提供のため、次の事業者を利用しています。
-        いずれも、業務の遂行に必要な範囲でのみ情報を取り扱います。
+        いずれも（Google LLC を除きます。Google LLC については、同社の利用規約およびプライバシーポリシーによります）、業務の遂行に必要な範囲でのみ情報を取り扱います。
       </p>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[36rem] border-collapse text-sm">
@@ -168,7 +180,7 @@ export default function Privacy() {
         </table>
       </div>
       <p>
-        このうち <strong>Stripe, Inc. および Resend</strong> は、
+        このうち <strong>Stripe, Inc.、Resend および Google LLC</strong> は、
         情報を<strong>アメリカ合衆国</strong>で取り扱います。
         Cloudflare, Inc. と Supabase, Inc. はアメリカ合衆国の法人ですが、
         本サービスの情報は上の表に記した地域に保存しています。
@@ -178,7 +190,7 @@ export default function Privacy() {
         ありません。分野ごとの法律と、州ごとの法律によって規律されています。
         また、いずれの国においても、その国の法令に基づく政府機関からの
         開示要求の対象となることがあります。
-        各事業者とは、個人情報の取扱いについて契約を結んでいます。
+        各事業者（Google LLC を除きます。Google LLC については、同社の利用規約およびプライバシーポリシーによります）とは、個人情報の取扱いについて契約を結んでいます。
       </p>
 
       <h3>お客様の端末から外部へ送信される情報</h3>
@@ -260,6 +272,10 @@ export default function Privacy() {
           投稿も、対応が終わるまで削除しません。
         </li>
         <li>
+          お問い合わせのメール（お問い合わせフォームからお送りいただいた内容を含みます）は、
+          退会とは別に、受信から6か月を経過した後、1か月以内に削除します。
+        </li>
+        <li>
           法令により保存が義務づけられている決済の記録は、
           <strong>7年間</strong>保管します。退会された場合は、
           個人が特定できない形にしたうえで保管します。
@@ -295,7 +311,7 @@ export default function Privacy() {
             障害に備えて、データベース全体の写しを毎日取得し、
             14日分を保管しています。
           </strong>
-          上のとおり削除した情報も、この写しの中には
+          上のとおり削除したデータベースの情報も、この写しの中には
           <strong>最長14日間</strong>残り、その後は写しごと自動的に消えます。
           写しは暗号化された保管領域に置き、障害からの復旧以外の目的では
           参照しません。
@@ -314,12 +330,12 @@ export default function Privacy() {
 
       <h2>8. 安全管理</h2>
       <ul>
-        <li>通信はすべて暗号化しています（HTTPS）。</li>
+        <li>本サービスとの通信はすべて暗号化しています（HTTPS）。</li>
         <li>
           管理画面へのアクセスには、通常のログインに加えて2段階の追加確認を
           設けています。
         </li>
-        <li>管理者による操作は、すべて記録されます。</li>
+        <li>管理画面での操作は、すべて記録されます。</li>
       </ul>
 
       <h2>9. 改定</h2>

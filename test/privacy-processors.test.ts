@@ -37,7 +37,8 @@ const HOST_TO_PROCESSOR: ReadonlyArray<readonly [string, string]> = [
  * URL としてコードに現れないが、情報を預けている先。
  * binding（R2・Hyperdrive・Workers 自身）や接続文字列で繋がる。
  */
-const BINDING_PROCESSORS = ["Cloudflare, Inc.", "Supabase, Inc."] as const;
+// Google LLC: support@rewrite-co.com を Cloudflare Email Routing で転送した先の Gmail（2026-09-26）。コードの宛先には現れない
+const BINDING_PROCESSORS = ["Cloudflare, Inc.", "Supabase, Inc.", "Google LLC"] as const;
 
 /** 検査の対象外にする宛先（自サイト、標準の語彙、テスト用の偽物） */
 const IGNORED = [
