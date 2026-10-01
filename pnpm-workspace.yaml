@@ -19,3 +19,9 @@ minimumReleaseAgeExclude:
 # ★上げたあと db:generate が通ることを実際に確かめること。★
 overrides:
   esbuild: '>=0.25.0'
+  # 2026-10-02: 開発用の道具（miniflare・eslint）経由の既知の脆弱性。本番の Worker には載らないが、
+  # CI の «既知の脆弱性»（必須）が落ちてマージできないため、影響する版の範囲だけ上げる。
+  # 上流（wrangler / eslint）が直した版に追いついたら消してよい。
+  'sharp@<0.35.4': '^0.35.4'
+  'undici@>=7.0.0 <7.29.1': '^7.29.1'
+  'brace-expansion@>=4.0.0 <5.0.11': '^5.0.11'
