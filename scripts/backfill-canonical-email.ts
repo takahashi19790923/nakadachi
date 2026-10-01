@@ -7,6 +7,7 @@ import {
   emailCanonicalHmac,
 } from "../app/server/crypto.server.ts";
 import {
+  appSecretFor,
   confirmIfProduction,
   createScriptDb,
   describeError,
@@ -33,21 +34,8 @@ import {
  * （本番は .env の *_PRODUCTION）。
  */
 
-function keyFor(target: string, name: string): string {
-  const suffix =
-    target === "production" || target === "production-neon"
-      ? "_PRODUCTION"
-      : target === "preview"
-        ? "_PREVIEW"
-        : "";
-  const value = process.env[`${name}${suffix}`] ?? process.env[name];
-  if (!value) {
-    throw new Error(
-      `${name}${suffix} が未設定です。復号と索引の作成に必要です。`,
-    );
-  }
-  return value;
-}
+// 鍵の取り出しは scripts/db.ts の appSecretFor に寄せた（接尾辞なしへ黙って落ちない）。
+const keyFor = appSecretFor;
 
 async function main(): Promise<void> {
   const target = parseTarget(process.argv[2]);

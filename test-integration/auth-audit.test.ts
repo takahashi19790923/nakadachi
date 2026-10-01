@@ -156,6 +156,71 @@ describe("認証まわりの監査ログの保持期間", () => {
     ]);
   });
 
+  /*
+   * ★本番と同じ権限で回す。★
+   *
+   * 上の検査は所有者の権限で回っていたので、本番で起きていたことを
+   * 一度も再現していなかった。本番のアプリ用ロールは db:harden で
+   * audit_logs の DELETE を取り上げてあり、直接 delete していた掃除は
+   * 2026-08-28 から毎日権限エラーで落ちていた（警報が35日続いた）。
+   */
+  async function asHardenedAppRole<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+    await db.execute(sql`
+      do $$ begin
+        if not exists (select 1 from pg_roles where rolname = 'test_hardened_app') then
+          create role test_hardened_app;
+        end if;
+      end $$
+    `);
+    await db.execute(sql`grant usage on schema public to test_hardened_app`);
+    await db.execute(sql`grant select, insert on audit_logs to test_hardened_app`);
+    // db:harden と同じ取り上げ方
+    await db.execute(sql`revoke delete, update, truncate on audit_logs from test_hardened_app`);
+    // 移行 0009 が本番のアプリ用ロールへ渡すのと同じ実行権
+    await db.execute(sql`grant execute on function public.purge_auth_audit_logs(integer) to test_hardened_app`);
+
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`set local role test_hardened_app`);
+      return fn(tx);
+    });
+  }
+
+  it("（前提の確認）このロールでは audit_logs を直接消せない", async () => {
+    // ★これが通らないなら、下の検査は本番を再現していない。★
+    await insert("auth.login_failed", 200);
+    await expect(
+      asHardenedAppRole((tx) => tx.execute(sql`delete from audit_logs`)),
+    ).rejects.toMatchObject({ cause: { code: "42501" } }); // permission denied
+  });
+
+  it("★DELETE を取り上げたロールでも、古い auth 系だけを消せる★", async () => {
+    await insert("auth.login_failed", 200);
+    await insert("authz.denied", 200);
+    await insert("auth.login_failed", 10);
+    await insert("admin.listing_suspend", 400);
+
+    const removed = await asHardenedAppRole((tx) => purgeOldAuthAuditLogs(tx));
+    expect(removed).toBe(2);
+
+    const left = (await db.select({ action: auditLogs.action }).from(auditLogs))
+      .map((r) => r.action)
+      .sort();
+    expect(left).toEqual(["admin.listing_suspend", "auth.login_failed"]);
+  });
+
+  it("★180日より短くは消させない（関数の中で固定）★", async () => {
+    // 引数で縮められると、乗っ取った相手が直近の記録を消せる。
+    await insert("auth.login_failed", 10);
+    await expect(
+      asHardenedAppRole((tx) =>
+        tx.execute(sql`select public.purge_auth_audit_logs(0)`),
+      ),
+    ).rejects.toMatchObject({ cause: { message: expect.stringContaining("at least 180") } });
+    expect(
+      await db.select({ n: sql<number>`count(*)::int` }).from(auditLogs),
+    ).toEqual([{ n: 1 }]);
+  });
+
   it("期限内のものは消さない", async () => {
     await insert("auth.login_failed", 10);
     expect(await purgeOldAuthAuditLogs(db)).toBe(0);

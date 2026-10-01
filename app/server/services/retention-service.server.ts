@@ -153,12 +153,18 @@ export async function purgeOldPayments(db: Db): Promise<number> {
  * 足すときは接頭辞に注意すること。
  */
 export async function purgeOldAuthAuditLogs(db: Db): Promise<number> {
-  const result = await db.execute(sql`
-    delete from audit_logs
-    where (action like 'auth.%' or action like 'authz.%')
-      and created_at <= now() - make_interval(days => ${AUTH_AUDIT_RETENTION_DAYS})
+  /*
+   * ★直接 delete しない。★ 本番のアプリ用ロールは audit_logs を消せない
+   * （db:harden で取り上げてある。乗っ取った相手が足跡を消せないように）。
+   * 直接 delete していた頃は、2026-08-28 から毎日権限エラーで落ちていた。
+   *
+   * 移行 0009 の関数が所有者の権限で動き、«auth 系で180日を過ぎたもの» だけを
+   * 消す。下限180日は関数の中で固定してあるので、引数で縮めることはできない。
+   */
+  const result = await db.execute<{ deleted: number }>(sql`
+    select public.purge_auth_audit_logs(${AUTH_AUDIT_RETENTION_DAYS}) as deleted
   `);
-  return result.rowCount ?? 0;
+  return Number(result.rows[0]?.deleted ?? 0);
 }
 
 /**

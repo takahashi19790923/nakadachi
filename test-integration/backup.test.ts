@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { emailDeliveryLogs } from "~/db/schema/index.ts";
@@ -7,6 +7,8 @@ import type { Db } from "~/server/db.server";
 import type { AppEnv } from "~/server/env.server";
 import { CRON_DAILY, runScheduledTasks } from "~/server/cron.server";
 import {
+  EXCLUDED_TABLES,
+  TABLES,
   exportDatabase,
   pruneOldBackups,
 } from "~/server/services/backup-service.server";
@@ -61,6 +63,31 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await closeTestDb();
+});
+
+describe("★書き出す表の一覧から、表が漏れない★", () => {
+  /*
+   * 一覧を手で持っていたので、site_flags（運用スイッチ）が漏れていた。
+   * 復元すると空になり、停止中の受付が黙って再開する形だった。
+   * 実際の DB にある表と突き合わせる（移行で表が増えたら、ここで止まる）。
+   */
+  it("DB の全表が «書き出す» か «書き出さない理由» のどちらかに入っている", async () => {
+    const rows = await db.execute<{ t: string }>(sql`
+      select tablename as t from pg_tables where schemaname = 'public' order by tablename
+    `);
+    const listed = new Set<string>([...TABLES, ...Object.keys(EXCLUDED_TABLES)]);
+    const missing = rows.rows.map((r) => r.t).filter((t) => !listed.has(t));
+    expect(missing).toEqual([]);
+  });
+
+  it("両方に入っている表は無い", () => {
+    const both = TABLES.filter((t) => t in EXCLUDED_TABLES);
+    expect(both).toEqual([]);
+  });
+
+  it("運用スイッチ（site_flags）は書き出す", () => {
+    expect(TABLES).toContain("site_flags");
+  });
 });
 
 describe("DB の書き出し", () => {
