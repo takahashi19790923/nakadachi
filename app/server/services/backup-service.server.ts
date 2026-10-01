@@ -55,7 +55,27 @@ export const TABLES = [
   "account_deletion_requests",
   "access_records",
   "email_delivery_logs",
+  /*
+   * ★運用スイッチ（受付の停止など）。★ 以前は一覧から漏れていて、
+   * 復元すると空になっていた。読めないときは «全部動いている» に倒す作り
+   * （site-flags.server.ts）なので、★停止中に復元すると、止めていた受付が
+   * 黙って再開する★（2026-10-02 の移行レビューで発覚）。
+   */
+  "site_flags",
 ] as const;
+
+/**
+ * ★書き出さない表。★ 理由を書いて、ここに明示する。
+ *
+ * 一覧を手で持つと、表を足した日に «どちらでもない» まま漏れる
+ * （site_flags がそうだった）。検査で «全表がどちらかに入っている» ことを
+ * 確かめている（test-integration/backup.test.ts）。
+ */
+export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
+  sessions: "ログイン中の状態。復元しても期限切れで、戻すと失効させた Cookie が生き返る",
+  email_verification_tokens: "使い捨てのログイン用コード。数分で失効し、戻すと使用済みが再び使える",
+  rate_limits: "短時間の回数制限のカウンタ。復元で戻す意味が無い",
+};
 
 /**
  * 1つの表で許す行数の上限。

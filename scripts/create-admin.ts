@@ -12,6 +12,8 @@ import {
   describeTarget,
   parseTarget,
   requireConnectionString,
+  appSecretFor,
+  type DbTarget,
 } from "./db.ts";
 
 /**
@@ -32,21 +34,14 @@ import {
  * 「作成は成功したのにログインできない管理者」ができる。しかも
  * ログイン画面は「確認コードを送りました」と正常に応答するので気づけない。
  *
- * 環境ごとの鍵を .env の EMAIL_ENCRYPTION_KEY_PREVIEW のような名前で持ち、
- * 無ければ環境なしの名前に落ちる（dev はこちら）。
+ * 環境ごとの鍵を .env の EMAIL_ENCRYPTION_KEY_PREVIEW のような名前で持つ。
+ * ★以前は «無ければ環境なしの名前に落ちる» 作りで、preview や本番でも
+ * dev の鍵で黙って作れてしまった★（production-neon では変数名が
+ * _PRODUCTION-NEON になり、常に dev の鍵へ落ちていた）。
+ * 取り出しは scripts/db.ts の appSecretFor に寄せた。
  */
-function requireKey(base: string, target: string): string {
-  const scoped = process.env[`${base}_${target.toUpperCase()}`];
-  const fallback = process.env[base];
-  const value = scoped ?? fallback;
-  if (!value) {
-    throw new Error(
-      `${base}_${target.toUpperCase()}（または ${base}）を .env に設定してください。` +
-        `★その環境の Worker へ投入したものと同じ値であること。★`,
-    );
-  }
-  return value;
-}
+const requireKey = (base: string, target: DbTarget): string =>
+  appSecretFor(target, base);
 
 async function main(): Promise<void> {
   const target = parseTarget(process.argv[2]);

@@ -17,6 +17,8 @@
 | 〃 | `markEndedImages` | 終了から90日の掲載の写真に削除待ちの印をつける |
 | 〃 | `purgeDeletedImages` | 削除待ちの画像を R2 から消す |
 | 〃 | `purgeEndedListings` | 終了から180日の掲載を消す（写真が無いものだけ） |
+| 〃 | `markAbandonedDraftImages` / `purgeAbandonedDrafts` | 180日放置された下書き（一度も公開していないもの）の写真と本文を消す |
+| 〃 | `purgeAuthAuditLogs` | 認証の記録（`auth.*` / `authz.*`）を180日で消す。**アプリは監査ログを直接消せない**ので、移行 0009 の関数 `purge_auth_audit_logs` 経由（2026-08-28〜10-02 は直接消そうとして毎日権限エラーで落ちていた） |
 | 〃 | `purgeWebhookEvents` / `purgeEmailLogs` | 運用データを90日で消す |
 | 〃 | `purgeResolvedReports` | 対応済みの通報を180日で消す |
 | 〃 | `purgeOldPayments` | **決済記録を7年で消す（帳簿）** |

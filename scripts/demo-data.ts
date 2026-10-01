@@ -14,6 +14,7 @@ import {
   createScriptDb,
   describeError,
   describeTarget,
+  appSecretFor,
   parseTarget,
   requireConnectionString,
 } from "./db.ts";
@@ -126,11 +127,10 @@ async function main(): Promise<void> {
   }
 
   const url = requireConnectionString(target);
-  const encryptionKey = process.env.EMAIL_ENCRYPTION_KEY;
-  const indexKey = process.env.EMAIL_INDEX_KEY;
-  if (!encryptionKey || !indexKey) {
-    throw new Error("EMAIL_ENCRYPTION_KEY と EMAIL_INDEX_KEY を .env に設定してください。");
-  }
+  // ★入れる先の環境の鍵で書く。★ dev の鍵で preview に入れると、preview の
+  // Worker が復号できず、通知の定期処理がまとめて落ちる（2026-09-10〜12 に実際に起きた）。
+  const encryptionKey = appSecretFor(target, "EMAIL_ENCRYPTION_KEY");
+  const indexKey = appSecretFor(target, "EMAIL_INDEX_KEY");
 
   const { db, pool } = createScriptDb(url);
   console.log(`仮データを入れます → ${describeTarget(target)}`);

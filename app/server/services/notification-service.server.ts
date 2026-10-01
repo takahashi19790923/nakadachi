@@ -258,26 +258,51 @@ export async function notifyExpiringListings(options: {
     .limit(options.limit ?? 200);
 
   let sent = 0;
+  let failed = 0;
   for (const row of rows) {
-    const recipient = await recipientEmail(db, env, row.ownerId);
-    if (!recipient || !recipient.notifyOnExpiry) continue;
+    /*
+     * ★1件ずつ囲う。★ 以前は宛先を1人でも開けない（復号できない）と
+     * そこで例外になり、★その日の全員分の期限通知が止まっていた★。
+     * preview で 2026-09-10〜12 に実際に起きた（デモの利用者の暗号化鍵が
+     * 環境と違っていた）。本番でも、壊れた行が1つあれば同じことになる。
+     */
+    try {
+      const recipient = await recipientEmail(db, env, row.ownerId);
+      if (!recipient || !recipient.notifyOnExpiry) continue;
 
-    const result = await sendEmail(
-      {
-        template: "listing_expiring",
-        to: recipient.email,
-        content: listingExpiringEmail({
-          title: row.title,
-          listingUrl: new URL(`/listings/${row.id}`, env.APP_ORIGIN).toString(),
-          daysLeft: daysBefore,
-        }),
-        idempotencyKey: `listing_expiring:${row.id}:${daysBefore}`,
-        userId: row.ownerId,
+      const result = await sendEmail(
+        {
+          template: "listing_expiring",
+          to: recipient.email,
+          content: listingExpiringEmail({
+            title: row.title,
+            listingUrl: new URL(`/listings/${row.id}`, env.APP_ORIGIN).toString(),
+            daysLeft: daysBefore,
+          }),
+          idempotencyKey: `listing_expiring:${row.id}:${daysBefore}`,
+          userId: row.ownerId,
+          listingId: row.id,
+        },
+        { db, env, logger },
+      );
+      if (result.sent) sent += 1;
+    } catch (error) {
+      failed += 1;
+      // ★宛先は出さない。★ ID だけで追える。
+      logger.error("listing expiring notice failed", error, {
         listingId: row.id,
-      },
-      { db, env, logger },
-    );
-    if (result.sent) sent += 1;
+        ownerId: row.ownerId,
+      });
+    }
+  }
+
+  /*
+   * ★送れる人に送り切ってから、失敗を «失敗» として返す。★
+   * 黙って件数だけ返すと、毎日同じ人に届いていないことに誰も気づかない。
+   * 投げれば定期処理が failed と記録し、運営者へ警報が出る。
+   */
+  if (failed > 0) {
+    throw new Error(`listing expiring notices failed: ${failed} of ${rows.length} (sent=${sent})`);
   }
   return sent;
 }

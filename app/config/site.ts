@@ -28,9 +28,15 @@ export const SITE = {
    * 複数サービスに同じ情報を持たせると、住所を変えたときにどれかが必ず古くなる。
    * 正本は rewrite-co.com/legal/ にあり、こちらからは絶対URLで参照するだけにする。
    */
+  /* ★共有ページに «なかだち» の節があるものだけを指す。★
+   *   rewrite-co.com/legal/ は1ページに全サービスの規約が縦に並ぶ作りで、
+   *   節だけのアンカー（#cookies）を指すと**他サービスの Cookieポリシー**に着地する。
+   *   このサービスは規約・プライバシー・特商法を自前の /legal/... に持っており、
+   *   共有ページにあるのは運営者情報だけ。Cookie の取扱いは
+   *   /legal/privacy の「お客様の端末から外部へ送信される情報」に書いてある
+   *   （2026-08-29 に cookiesUrl を削除）。 */
   legal: {
     operatorUrl: "https://rewrite-co.com/legal/#operator",
-    cookiesUrl: "https://rewrite-co.com/legal/#cookies",
   },
 } as const;
 

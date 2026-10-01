@@ -64,6 +64,13 @@
       "when": 1787931063943,
       "tag": "0008_remarkable_famine",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790894952522,
+      "tag": "0009_purge_auth_audit_logs",
+      "breakpoints": true
     }
   ]
 }

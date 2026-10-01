@@ -420,3 +420,33 @@ export function describeError(error: unknown): string {
     .join("\n    ← ")
     .replace(/postgresql:\/\/\S+/g, "<接続文字列>");
 }
+
+
+/**
+ * その環境の Worker が使っているのと同じアプリ用の鍵を .env から取る。
+ *
+ *   dev → NAME / preview → NAME_PREVIEW / production(-neon)・drill → NAME_PRODUCTION
+ *
+ * ★preview と本番では、接尾辞なしへ黙って落ちない。★
+ * 以前は「無ければ NAME」に落ちる書き方が残っていて、デモデータの作成は
+ * そもそも NAME しか見ていなかった。preview のデモ利用者が dev の鍵で
+ * 暗号化され、preview の Worker が復号できず、期限通知の定期処理が
+ * 毎日落ちた（2026-09-10〜12）。別の鍵で書いた行は、エラーも出ずに入る。
+ */
+export function appSecretFor(target: DbTarget, name: string): string {
+  const suffix =
+    // drill（復旧の練習）は本番の写しを流し込む先なので、本番の鍵で読む。
+    target === "production" || target === "production-neon" || target === "drill"
+      ? "_PRODUCTION"
+      : target === "preview"
+        ? "_PREVIEW"
+        : "";
+  const value = process.env[`${name}${suffix}`];
+  if (!value) {
+    throw new Error(
+      `${name}${suffix} が .env にありません。` +
+        (suffix ? `（${name} では代用しません。別の環境の鍵で書いた行は、その環境で読めなくなります）` : ""),
+    );
+  }
+  return value;
+}

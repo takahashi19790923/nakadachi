@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { parseTarget, requireConnectionString } from "../scripts/db.ts";
+import { appSecretFor, parseTarget, requireConnectionString } from "../scripts/db.ts";
 
 /**
  * 接続先の取り違えを止める検査。
@@ -195,5 +195,41 @@ describe("preview / dev", () => {
     expect(() => requireConnectionString("preview")).toThrow(
       /nakadachi_preview/,
     );
+  });
+});
+
+describe("★アプリ用の鍵は、入れる先の環境のものを使う★", () => {
+  /*
+   * preview のデモ利用者が dev の鍵で暗号化され、preview の Worker が
+   * 復号できず、期限通知の定期処理が毎日落ちた（2026-09-10〜12）。
+   * 別の鍵で書いた行はエラーも出ずに入るので、書く側で止める。
+   */
+  const NAME = "TEST_ONLY_APP_KEY";
+  afterEach(() => {
+    delete process.env[NAME];
+    delete process.env[`${NAME}_PREVIEW`];
+    delete process.env[`${NAME}_PRODUCTION`];
+  });
+
+  it("環境ごとに接尾辞の付いた鍵を返す", () => {
+    process.env[NAME] = "dev-key";
+    process.env[`${NAME}_PREVIEW`] = "preview-key";
+    process.env[`${NAME}_PRODUCTION`] = "prod-key";
+    expect(appSecretFor("dev", NAME)).toBe("dev-key");
+    expect(appSecretFor("preview", NAME)).toBe("preview-key");
+    expect(appSecretFor("production", NAME)).toBe("prod-key");
+    expect(appSecretFor("production-neon", NAME)).toBe("prod-key");
+    // drill は本番の写しを入れる先なので、本番の鍵で読む
+    expect(appSecretFor("drill", NAME)).toBe("prod-key");
+  });
+
+  it("★preview の鍵が無ければ、dev の鍵で代用せずに止める★", () => {
+    process.env[NAME] = "dev-key";
+    expect(() => appSecretFor("preview", NAME)).toThrow(/_PREVIEW/);
+  });
+
+  it("★本番の鍵が無ければ、dev の鍵で代用せずに止める★", () => {
+    process.env[NAME] = "dev-key";
+    expect(() => appSecretFor("production", NAME)).toThrow(/_PRODUCTION/);
   });
 });
