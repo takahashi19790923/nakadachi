@@ -155,7 +155,7 @@ export function paymentFailedEmail(options: {
       <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
       <p style="margin:0;font-size:13px;color:#6d6759">
         カードの有効期限や利用限度額をご確認のうえ、もう一度お試しください。<br>
-        料金が二重に請求されることはありません。
+        お支払いが済んでいるはずの場合は、もう一度お支払いの手続きをせずに、お問い合わせからご連絡ください。
       </p>`,
     bodyText: [
       "次の投稿の掲載料をお預かりできませんでした。投稿は下書きとして残っています。",
@@ -163,7 +163,7 @@ export function paymentFailedEmail(options: {
       options.title,
       "",
       "カードの有効期限や利用限度額をご確認のうえ、もう一度お試しください。",
-      "料金が二重に請求されることはありません。",
+      "お支払いが済んでいるはずの場合は、もう一度お支払いの手続きをせずに、お問い合わせからご連絡ください。",
     ].join("\n"),
     actionUrl: options.retryUrl,
     actionLabel: "もう一度手続きする",
@@ -233,34 +233,57 @@ export function listingExpiringEmail(options: {
 
 // ── 6. 管理者による非公開 ──────────────────────────────────────────
 
+/**
+ * ★非公開（suspended）と却下（rejected）で文を分ける。★
+ * 却下は «お支払いの後・公開の前» なら全額返金の対象（利用規約第5条2項）。
+ * 同じ文で «返金はありません» と送ると、払った後に却下された人へ誤って伝わる。
+ * HTML とテキストは同じ内容にする（以前はテキスト版に返金の行が無かった）。
+ */
 export function listingSuspendedEmail(options: {
+  kind: "suspended" | "rejected";
+  /** 公開されたことがあるか（却下のとき、返金の対象かを分ける） */
+  wasPublished: boolean;
   title: string;
   reason: string;
   contactUrl: string;
 }): EmailContent {
+  const rejected = options.kind === "rejected";
+  const heading = rejected ? "投稿の掲載を見送りました" : "投稿を非公開にしました";
+  const lead = rejected
+    ? "次の投稿を、利用規約に照らして掲載しないことにしました（却下）。"
+    : "次の投稿を、利用規約に照らして非公開にしました。";
+  const refund = rejected && !options.wasPublished
+    ? [
+        "掲載料をお支払い済みの場合は、全額を返金します（手続きは運営者が行います）。お支払いの前であれば、料金は発生していません。",
+      ]
+    : [
+        `規約違反による${rejected ? "却下" : "非公開"}の場合、掲載料の返金はありません（利用規約第5条）。`,
+        "当方の判断に誤りがあった場合は公開に戻し、止めていた期間の分だけ掲載期間を延長します（戻せない場合は全額を返金します）。",
+      ];
   const { html, text } = layout({
-    heading: "投稿を非公開にしました",
+    heading,
     bodyHtml: `
-      <p style="margin:0 0 12px">次の投稿を、利用規約に照らして非公開にしました。</p>
+      <p style="margin:0 0 12px">${lead}</p>
       <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
       <p style="margin:0 0 12px">理由：${escapeHtml(options.reason)}</p>
       <p style="margin:0;font-size:13px;color:#6d6759">
         お心当たりがない場合や、内容についてご説明がある場合は、お問い合わせからご連絡ください。<br>
-        掲載料の返金については、お問い合わせのうえ個別に対応します。
+        ${refund.join("<br>")}
       </p>`,
     bodyText: [
-      "次の投稿を、利用規約に照らして非公開にしました。",
+      lead,
       "",
       options.title,
       `理由：${options.reason}`,
       "",
-      "お心当たりがない場合は、お問い合わせからご連絡ください。",
+      "お心当たりがない場合や、内容についてご説明がある場合は、お問い合わせからご連絡ください。",
+      ...refund,
     ].join("\n"),
     actionUrl: options.contactUrl,
     actionLabel: "お問い合わせ",
   });
 
-  return { subject: `【${SITE.name}】投稿を非公開にしました`, html, text };
+  return { subject: `【${SITE.name}】${heading}`, html, text };
 }
 
 // ── 7. アカウント削除の確認 ────────────────────────────────────────
@@ -275,6 +298,7 @@ export function accountDeletionEmail(options: {
       <p style="margin:0 0 12px">${escapeHtml(options.purgeDate)}に、アカウントと投稿・メッセージを削除します。</p>
       <p style="margin:0 0 12px">それまではログインでき、下のリンクから取り消せます。</p>
       <p style="margin:0;font-size:13px;color:#6d6759">
+        利用規約違反などでアカウントの利用を停止している間は、対応が終わるまで削除を見送ります。<br>
         法令で保存が求められる決済の記録は、個人が特定できない形にしたうえで保管します。<br>
         削除後の復旧はできません。
       </p>`,
@@ -282,6 +306,7 @@ export function accountDeletionEmail(options: {
       `${options.purgeDate}に、アカウントと投稿・メッセージを削除します。`,
       "それまではログインでき、下のリンクから取り消せます。",
       "",
+      "利用規約違反などでアカウントの利用を停止している間は、対応が終わるまで削除を見送ります。",
       "法令で保存が求められる決済の記録は、個人が特定できない形にしたうえで保管します。",
       "削除後の復旧はできません。",
     ].join("\n"),

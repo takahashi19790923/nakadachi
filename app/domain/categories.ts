@@ -168,6 +168,13 @@ export interface CategoryDefinition {
   readonly usesHandover: boolean;
   /** 一覧・詳細で強調する項目の並び（表示順の意図をここに集約する） */
   readonly highlightFields: readonly string[];
+  /**
+   * 新しい掲載を受け付けるか。
+   *
+   * ★止めても一覧・検索・/c/:slug は残す。★ 止めるのは «新しく作る» と
+   * «決済に進む» だけ。公開中のものの扱いは変えない。
+   */
+  readonly acceptsNewListings: boolean;
 }
 
 export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
@@ -184,6 +191,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: true,
     usesHandover: true,
     highlightFields: ["price", "itemCondition", "handoverMethod"],
+    acceptsNewListings: true,
   },
   giveaway: {
     slug: "giveaway",
@@ -199,6 +207,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: true,
     usesHandover: true,
     highlightFields: ["price", "itemCondition", "handoverMethod"],
+    acceptsNewListings: true,
   },
   rental: {
     slug: "rental",
@@ -214,6 +223,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: true,
     usesHandover: false,
     highlightFields: ["price", "rentalPeriod", "deposit", "itemCondition"],
+    acceptsNewListings: true,
   },
   help: {
     slug: "help",
@@ -228,6 +238,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: false,
     usesHandover: false,
     highlightFields: ["price", "availability", "serviceMode"],
+    acceptsNewListings: true,
   },
   job: {
     slug: "job",
@@ -243,8 +254,24 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: false,
     usesHandover: false,
     highlightFields: ["salary", "employmentType", "workHours", "companyName"],
+    // ★新規の受付を止めている（2026-10）。★ 求人の掲載の扱いを見直すまで。
+    // 一覧・検索・/c/job は残す。
+    acceptsNewListings: false,
   },
 };
+
+/** 新しい掲載を受け付けているか */
+export function isCategoryAcceptingNew(slug: CategorySlug): boolean {
+  return CATEGORIES[slug].acceptsNewListings;
+}
+
+/**
+ * 受付を止めているカテゴリの案内。画面とサーバーの拒否で同じ文を使う
+ * （画面だけ止めても、送信を書き換えれば作れてしまう）。
+ */
+export function categoryIntakePausedMessage(slug: CategorySlug): string {
+  return `「${CATEGORIES[slug].name}」の新しい掲載は、現在受け付けを停止しています。`;
+}
 
 export const CATEGORY_LIST: readonly CategoryDefinition[] =
   CATEGORY_SLUGS.map((slug) => CATEGORIES[slug]);

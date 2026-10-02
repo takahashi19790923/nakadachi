@@ -137,7 +137,8 @@ export default function AdminUsers({
       <p className="mt-2 text-sm text-washi-700">
         利用を停止すると、<strong>その人の掲載はすべて公開ページから消え、
         ログイン中の端末もその場で切断されます。</strong>
-        再開すると掲載も元に戻ります（掲載料の返金は行われません）。
+        再開すると掲載も元に戻ります（掲載料の返金は行われません。停止の間も掲載期間は進みます）。
+        退会のお申し込みがある人は、停止している間は削除を見送ります。
       </p>
 
       <ErrorSummary message={actionData?.message} fields={actionData?.fields} />

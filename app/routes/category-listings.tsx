@@ -1,7 +1,7 @@
 import { SITE } from "~/config/site";
 import { ListingGrid, SearchFilters } from "~/components/listing-grid";
 import { Pagination } from "~/components/ui";
-import { CATEGORIES, isCategorySlug } from "~/domain/categories";
+import { CATEGORIES, categoryIntakePausedMessage, isCategorySlug } from "~/domain/categories";
 import { buildPageMeta } from "~/domain/seo";
 import { notFound } from "~/server/errors";
 import { buildPageHref } from "~/domain/list-params";
@@ -45,6 +45,11 @@ export default function CategoryListings({ loaderData }: Route.ComponentProps) {
     <div className="mx-auto w-full max-w-5xl px-4 py-8">
       <h1 className="text-2xl font-bold text-washi-900">{category.name}</h1>
       <p className="mt-2 text-washi-700">{category.description}</p>
+      {category.acceptsNewListings ? null : (
+        <p role="status" className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+          {categoryIntakePausedMessage(category.slug)}
+        </p>
+      )}
 
       <SearchFilters
         action={basePath}

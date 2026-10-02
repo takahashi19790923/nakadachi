@@ -5,7 +5,12 @@ import {
   listingCategoryDetails,
   listings,
 } from "~/db/schema/index.ts";
-import { CATEGORIES } from "~/domain/categories";
+import {
+  CATEGORIES,
+  categoryIntakePausedMessage,
+  isCategoryAcceptingNew,
+  type CategorySlug,
+} from "~/domain/categories";
 import {
   assertTransition,
   type ListingStatus,
@@ -115,6 +120,17 @@ async function validateAgainstDatabase(
   }
 }
 
+/**
+ * 新しい掲載の受付を止めているカテゴリなら止める。
+ * 下書きの作成・下書きの編集・決済の開始の3か所で呼ぶ。
+ */
+export function assertCategoryAcceptingNew(slug: CategorySlug): void {
+  if (isCategoryAcceptingNew(slug)) return;
+  throw new AppError("conflict", categoryIntakePausedMessage(slug), {
+    detail: `category intake paused: ${slug}`,
+  });
+}
+
 export async function createDraft(
   db: Db,
   ownerId: string,
@@ -126,6 +142,7 @@ export async function createDraft(
     */
   const flags = await getSiteFlags(db);
   if (flags.listingsPaused) throw pausedError("listing", flags.notice);
+  assertCategoryAcceptingNew(input.categorySlug);
 
   await validateAgainstDatabase(db, input);
   const categoryId = await resolveCategoryId(db, input.categorySlug);
@@ -206,6 +223,8 @@ export async function updateListing(
       { detail: `edit attempted on status=${row.status}` },
     );
   }
+  // 受付を止めたカテゴリの下書きは、先へ進めない（公開中のものの編集は止めない）。
+  if (row.status === "draft") assertCategoryAcceptingNew(input.categorySlug);
 
   await db.transaction(async (tx) => {
     await tx
@@ -267,6 +286,8 @@ export async function transitionListing(
       status: listings.status,
       durationDays: listings.durationDays,
       publishedAt: listings.publishedAt,
+      expiresAt: listings.expiresAt,
+      closedAt: listings.closedAt,
     })
     .from(listings)
     .where(eq(listings.id, options.listingId))
@@ -290,14 +311,27 @@ export async function transitionListing(
 
   if (options.to === "published") {
     values.moderationReason = null;
-    if (from === "suspended" && current.publishedAt) {
+    if ((from === "suspended" || from === "rejected") && current.publishedAt) {
       /*
        * ★非公開からの復帰では期間を作り直さない。★ 管理者が一時的に
        * 止めて戻しただけで、published_at が今日になり expires_at が
        * また30日先になっていた（払っていない期間が増える）。
-       * 元の日付をそのまま残す。期限がすでに過ぎていれば、毎時の
-       * 期限切れ処理が expired にする。それが正しい。
+       * published_at は元のまま残す。
+       *
+       * ★ただし止めていた時間の分だけ期限を延ばす（2026-10 の返金方針）。★
+       * 戻すのは «運営者の判断の誤り» のときで、その間は見えなかった。
+       * 延ばさないと、払った掲載期間を運営者の誤りで削ることになる。
+       * 止めた時刻は closed_at にある。無い古い行は延ばさない。
+       * 返金で system が止めたものを戻した場合にも延びる（その状態は
+       * 突き合わせの «返金済みなのに公開中» の警報が別に拾う）。
+       * 公開済みの投稿を却下（rejected）してから戻す場合も同じ扱い。
+       * 公開されたことの無い却下（決済待ちからの却下）は published_at が
+       * 無いので、下の «新しく公開» の扱いになる。
        */
+      if (current.closedAt && current.expiresAt) {
+        const stoppedMs = Math.max(0, now.getTime() - current.closedAt.getTime());
+        values.expiresAt = new Date(current.expiresAt.getTime() + stoppedMs);
+      }
     } else {
       values.publishedAt = now;
       /*

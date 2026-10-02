@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 
-import { listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
+import { categories, listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
+import { isCategorySlug } from "~/domain/categories";
 import {
   isValidListingFeePayment,
   LISTING_FEE_CURRENCY,
@@ -14,6 +15,7 @@ import { requireSecret, type AppEnv } from "../../env.server.ts";
 import { AppError, notFound } from "../../errors.ts";
 import type { Logger } from "../../logger.server.ts";
 import {
+  assertCategoryAcceptingNew,
   flagPublishedListing,
   transitionListing,
 } from "../listing-service.server.ts";
@@ -81,8 +83,10 @@ export async function startListingCheckout(options: {
       status: listings.status,
       title: listings.title,
       durationDays: listings.durationDays,
+      categorySlug: categories.slug,
     })
     .from(listings)
+    .innerJoin(categories, eq(categories.id, listings.categoryId))
     .where(eq(listings.id, listingId))
     .limit(1);
 
@@ -115,6 +119,15 @@ export async function startListingCheckout(options: {
       detail: `checkout attempted on status=${listing.status}`,
     });
   }
+
+  // ★受付を止めたカテゴリは、Stripe を呼ぶ前に止める。★ 下書きが残っていても払わせない。
+  // 知らないカテゴリは素通りさせない（将来カテゴリを足したとき、決済だけ開いてしまわないように）。
+  if (!isCategorySlug(listing.categorySlug)) {
+    throw new AppError("conflict", "この投稿は決済に進める状態ではありません。", {
+      detail: `unknown category at checkout: ${listing.categorySlug}`,
+    });
+  }
+  assertCategoryAcceptingNew(listing.categorySlug);
 
   // やり直しのとき無効にする、前回ぶんの決済。無効化は下で行う。
   const stripeSecretKey = requireSecret(env, "STRIPE_SECRET_KEY");

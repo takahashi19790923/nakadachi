@@ -131,6 +131,7 @@ export async function action({ request, context: rawContext, params }: Route.Act
           logger: context.logger,
           listingId: params.listingId,
           reason,
+          kind: target,
         }).catch(() => undefined),
       );
     }
@@ -269,7 +270,9 @@ export default function AdminListingDetail({
           <Link to="/admin/payments" className="link mx-1">
             決済状況
           </Link>
-          から明示的に処理してください。
+          から明示的に処理してください（お支払いの後・公開の前に却下・削除した場合は、
+          利用規約第5条により全額返金の対象です）。判断の誤りで非公開・却下にした
+          公開済みの投稿を «公開に戻す» と、止めていた期間の分だけ掲載期間が延びます。
         </p>
       </Form>
     </div>
