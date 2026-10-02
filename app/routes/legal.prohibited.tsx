@@ -23,11 +23,12 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
 
 export default function Prohibited() {
   return (
-    <LegalPage title="禁止行為・禁止出品物" lastUpdated="2026年8月13日">
+    <LegalPage title="禁止行為・禁止出品物" lastUpdated="2026年10月3日">
       <p>
         次のものは掲載できません。掲載が確認された場合、事前の通知なく非公開と
         し、繰り返される場合はアカウントの利用を停止します。
-        <strong>この場合、掲載料の返金はありません。</strong>
+        <strong>この場合、掲載料の返金はありません</strong>
+        （返金の扱いは利用規約第5条のとおりです）。
       </p>
 
       <h2>掲載できないもの</h2>
@@ -93,6 +94,9 @@ export default function Prohibited() {
       </ul>
 
       <h2>求人の掲載について</h2>
+      <p>
+        （現在、「お仕事」カテゴリの新しい掲載の受け付けを停止しています。）
+      </p>
       <p>
         「お仕事」カテゴリでは、次の内容を掲載できません。
       </p>

@@ -1,7 +1,12 @@
 import { Link, redirect } from "react-router";
 
 import { ListingForm } from "~/components/listing-form";
-import { CATEGORY_LIST, isCategorySlug } from "~/domain/categories";
+import {
+  CATEGORY_LIST,
+  categoryIntakePausedMessage,
+  isCategoryAcceptingNew,
+  isCategorySlug,
+} from "~/domain/categories";
 import { privatePageMeta } from "~/domain/seo";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { readCookie } from "~/server/cookies.server";
@@ -26,7 +31,15 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
   const db = context.getDb();
 
   if (!categorySlug || !isCategorySlug(categorySlug)) {
-    return { step: "choose" as const, csrfToken: context.csrfToken };
+    return { step: "choose" as const, csrfToken: context.csrfToken, notice: null };
+  }
+  // 受付を止めたカテゴリは、フォームへ進ませず選ぶ画面に戻す（送信はサーバー側でも止める）。
+  if (!isCategoryAcceptingNew(categorySlug)) {
+    return {
+      step: "choose" as const,
+      csrfToken: context.csrfToken,
+      notice: categoryIntakePausedMessage(categorySlug),
+    };
   }
 
   const [prefectures, cities] = await Promise.all([
@@ -88,8 +101,13 @@ export default function NewListing({
         <p className="mt-2 text-washi-700">
           カテゴリを選んでください。下書きの保存は無料です。
         </p>
+        {loaderData.notice ? (
+          <p role="status" className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+            {loaderData.notice}
+          </p>
+        ) : null}
         <ul className="mt-6 space-y-3">
-          {CATEGORY_LIST.map((category) => (
+          {CATEGORY_LIST.filter((category) => category.acceptsNewListings).map((category) => (
             <li key={category.slug}>
               <Link
                 to={`/listings/new?category=${category.slug}`}
@@ -103,6 +121,11 @@ export default function NewListing({
             </li>
           ))}
         </ul>
+        {CATEGORY_LIST.filter((category) => !category.acceptsNewListings).map((category) => (
+          <p key={category.slug} className="mt-4 text-sm text-washi-600">
+            {categoryIntakePausedMessage(category.slug)}
+          </p>
+        ))}
       </div>
     );
   }

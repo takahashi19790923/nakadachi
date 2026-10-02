@@ -100,7 +100,7 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
       */}
       {canceled ? (
         <p className="mt-4 rounded-lg border border-washi-300 bg-washi-100 p-4 text-washi-800">
-          お支払いは行われていません。料金は請求されていません。
+          この画面からのお支払いは完了していません。
           このままもう一度お支払いに進むこともできますし、あとから
           <Link to="/mypage/drafts" className="link mx-1">
             下書き一覧
@@ -186,6 +186,36 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
               </Link>
               から選び直してください。
             </p>
+
+            {/*
+              ★最終確認画面に、キャンセル・返金の扱いを出す（特商法12条の6）。★
+              Stripe の画面へ移る前のこの画面が、申込みの最終確認画面になる。
+              文は利用規約第5条・特商法の表記と同じ方針にそろえる。
+            */}
+            <div className="mt-4 rounded-lg border border-washi-300 bg-washi-50 p-3 text-sm text-washi-800">
+              <p className="font-semibold">キャンセル・返金について</p>
+              <p className="mt-1">
+                公開後のキャンセル・返金はできません（ご自身で掲載を終了した場合、
+                掲載期間の満了、規約違反による非公開・アカウントの利用停止を含みます）。
+              </p>
+              <p className="mt-1">
+                当方の不具合などでお支払いの後に公開されなかった場合、重複して請求した場合、
+                お支払いの後・公開の前に投稿が削除または却下された場合は、全額を返金します。
+                当方の判断の誤りで非公開にした場合は、公開に戻して非公開の期間の分だけ
+                掲載期間を延長します（戻せない場合は全額を返金）。
+              </p>
+              <p className="mt-1">
+                詳しくは
+                <Link to="/legal/terms" className="link mx-1">
+                  利用規約（第5条）
+                </Link>
+                と
+                <Link to="/legal/tokushoho" className="link mx-1">
+                  特定商取引法に基づく表記
+                </Link>
+                をご覧ください。
+              </p>
+            </div>
 
             {fetcher.data?.message ? (
               <p className="mt-4 rounded-lg border border-kaki-300 bg-kaki-50 p-3 text-kaki-900">

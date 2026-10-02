@@ -63,7 +63,7 @@ const PROCESSORS = [
 
 export default function Privacy() {
   return (
-    <LegalPage title="プライバシーポリシー" lastUpdated="2026年9月26日">
+    <LegalPage title="プライバシーポリシー" lastUpdated="2026年10月3日">
       <h2>1. 取得する情報</h2>
       <ul>
         <li>
@@ -262,6 +262,11 @@ export default function Privacy() {
         <li>
           退会をお申し込みいただくと、<strong>30日後</strong>にアカウント、
           投稿、写真、メッセージを削除します。それまでは取り消せます。
+        </li>
+        <li>
+          利用規約違反などでアカウントの利用を停止している方の情報は、不正利用の防止と
+          紛争への対応のため、退会のお申し込みがあっても停止の対応が終わるまで保持します。
+          停止を解除した後、削除の予定日を過ぎていれば次の定期処理（毎日早朝）で削除します。
         </li>
         <li>
           <strong>

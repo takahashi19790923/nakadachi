@@ -121,7 +121,7 @@ export default function CloseListing({
         <ul className="mt-4 list-inside list-disc space-y-1 text-washi-700">
           <li>掲載を終了すると、検索や一覧に表示されなくなります。</li>
           <li>
-            <strong>掲載料の返金はありません。</strong>
+            <strong>ご自身で掲載を終了した場合、掲載料の返金はありません。</strong>
           </li>
           <li>
             あらためて掲載する場合は、新しい投稿として作成し、
@@ -132,10 +132,17 @@ export default function CloseListing({
       ) : (
         <ul className="mt-4 list-inside list-disc space-y-1 text-washi-700">
           <li>この投稿はまだ公開されていません。</li>
-          <li>
-            <strong>料金は請求されていません。</strong>削除しても費用は
-            かかりません。
-          </li>
+          {status === "payment_pending" ? (
+            <li>
+              お支払いがお済みの場合は、削除した後でも掲載料の全額を返金します。
+              お問い合わせからご連絡ください。
+            </li>
+          ) : (
+            <li>
+              <strong>料金は発生していません。</strong>削除しても費用は
+              かかりません。
+            </li>
+          )}
           <li>削除すると元に戻せません。写真も一緒に削除されます。</li>
         </ul>
       )}

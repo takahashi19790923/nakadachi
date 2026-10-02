@@ -4,7 +4,10 @@ import { ADMIN_STATUS_TILES, LISTING_STATUS_LABEL } from "~/domain/listing-statu
 import { privatePageMeta } from "~/domain/seo";
 import { requireAdminGate } from "~/server/guards.server";
 import { SUSPENDED_REVIEW_DAYS } from "~/domain/retention";
-import { countSuspendedNeedingReview } from "~/server/repositories/admin-repository.server";
+import {
+  countSuspendedNeedingReview,
+  countSuspendedWithPendingDeletion,
+} from "~/server/repositories/admin-repository.server";
 import { countUsers } from "~/server/repositories/user-repository.server";
 import { countOpenReports } from "~/server/repositories/moderation-repository.server";
 import { countListingsByStatus } from "~/server/services/listing-service.server";
@@ -27,6 +30,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
     failedWebhooks,
     anomalies,
     staleSuspended,
+    suspendedPendingDeletion,
   ] = await Promise.all([
       countListingsByStatus(db),
       countUsers(db),
@@ -39,6 +43,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
        */
       findPaymentAnomalies(db),
       countSuspendedNeedingReview(db, SUSPENDED_REVIEW_DAYS),
+      countSuspendedWithPendingDeletion(db),
     ]);
 
   return {
@@ -50,6 +55,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
       (a) => a.kind === "webhook_never_arrived",
     ).length,
     staleSuspended,
+    suspendedPendingDeletion,
   };
 }
 
@@ -84,6 +90,7 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
     failedWebhooks,
     webhookNeverArrived,
     staleSuspended,
+    suspendedPendingDeletion,
   } = loaderData;
 
   return (
@@ -145,6 +152,19 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
           </span>
           <Link to="/admin/listings?status=suspended" className="link">
             停止中の投稿を見る
+          </Link>
+        </p>
+      ) : null}
+
+      {suspendedPendingDeletion > 0 ? (
+        <p className="mt-4 rounded-lg border border-washi-300 bg-washi-50 p-4 text-washi-900">
+          利用停止中で、退会のお申し込みがある利用者が {suspendedPendingDeletion} 人います。
+          <span className="mt-1 block text-sm">
+            停止中は<strong>退会の削除を見送っています</strong>（停止の記録を残すため）。
+            停止を解除すると、削除の予定日を過ぎていれば次の日次の処理（04:20）で削除されます。
+          </span>
+          <Link to="/admin/users" className="link">
+            利用者の一覧を見る
           </Link>
         </p>
       ) : null}

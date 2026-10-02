@@ -38,6 +38,9 @@ export default function Categories() {
               </Link>
             </h2>
             <p className="mt-1 text-washi-700">{category.description}</p>
+            {category.acceptsNewListings ? null : (
+              <p className="mt-1 text-sm text-amber-800">新しい掲載の受け付けを停止中</p>
+            )}
             <p className="mt-3 text-sm text-washi-600">
               {category.kindLabel}：
               {category.kinds.map((kind) => LISTING_KIND_LABEL[kind]).join("・")}
