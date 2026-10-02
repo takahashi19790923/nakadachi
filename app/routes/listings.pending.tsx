@@ -70,7 +70,12 @@ export default function PendingPayment({ loaderData }: Route.ComponentProps) {
       {failed ? (
         <>
           <p className="mt-4 text-washi-700">
-            投稿は下書きとして残っています。料金は請求されていません。
+            投稿は下書きとして残っています。お支払いを当方で確認できませんでした。
+            お支払いが済んでいるはずの場合は、もう一度お支払いの手続きをせずに、
+            <Link to="/contact" className="link mx-1">
+              お問い合わせ
+            </Link>
+            からご連絡ください。
           </p>
           <Link
             to={`/listings/${listingId}/confirm`}
@@ -92,11 +97,11 @@ export default function PendingPayment({ loaderData }: Route.ComponentProps) {
               : "決済待ち"}
           </p>
           <p className="mt-6 text-sm text-washi-600">
-            数分たっても変わらない場合は、
-            <Link to="/mypage/drafts" className="link mx-1">
-              下書き一覧
+            数分たっても変わらない場合は、もう一度お支払いの手続きをせずに、
+            <Link to="/contact" className="link mx-1">
+              お問い合わせ
             </Link>
-            からご確認ください。二重に請求されることはありません。
+            からご連絡ください（投稿のタイトルをお書きください）。
           </p>
         </>
       )}

@@ -1,4 +1,4 @@
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, asc, eq, lte, ne, sql } from "drizzle-orm";
 
 import {
   accountDeletionRequests,
@@ -51,8 +51,20 @@ export async function purgeDueAccounts(options: {
       and(
         eq(accountDeletionRequests.status, "pending"),
         lte(accountDeletionRequests.scheduledPurgeAt, new Date()),
+        /*
+         * ★利用停止中の人は消さない。★ 停止中は users の行そのものが
+         * «停止の記録» で、同じ受信箱での再登録を止めている
+         * （hasSuspendedAccountForInbox）。先に退会を申し込んでおけば、
+         * 停止されても30日後に記録ごと消えて再登録できた（2026-10 の監査 AUTH-02）。
+         * ★取ってくる条件に入れる。★ 取った後に飛ばすと、停止中の人で
+         * 1日の枠（limit）が埋まり、ほかの人の削除が止まる。
+         * 停止を解けば、予定日を過ぎていれば次の日次で消える。
+         */
+        ne(users.status, "suspended"),
       ),
     )
+    // 予定日の古い順に消す（1日の枠を超えたとき、待たせる順を決めておく）。
+    .orderBy(asc(accountDeletionRequests.scheduledPurgeAt))
     .limit(options.limit ?? 50);
 
   let purged = 0;

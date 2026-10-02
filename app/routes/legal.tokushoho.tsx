@@ -31,7 +31,7 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
  */
 export default function Tokushoho() {
   return (
-    <LegalPage title="特定商取引法に基づく表記" lastUpdated="2026年8月13日">
+    <LegalPage title="特定商取引法に基づく表記" lastUpdated="2026年10月3日">
       <table className="mt-6 w-full border-collapse text-sm">
         <tbody>
           <Row label="販売事業者・運営統括責任者・所在地・連絡先">
@@ -67,11 +67,16 @@ export default function Tokushoho() {
             <strong className="mt-1 block">自動更新および自動課金は行いません。</strong>
           </Row>
           <Row label="返品・キャンセルについて">
-            役務の性質上、公開後のキャンセルおよび返金はお受けできません。
+            役務の性質上、公開後のキャンセルおよび返金はお受けできません
+            （ご自身で掲載を終了した場合、掲載期間の満了、規約違反による非公開・
+            アカウントの利用停止を含みます）。
             公開前（下書きの状態）であれば料金は発生しません。
             <span className="mt-1 block text-washi-600">
-              当方の責めに帰すべき事由により投稿が公開されなかった場合は、
-              お問い合わせのうえ個別に対応いたします。
+              当方の不具合などによりお支払いの後に公開されなかった場合、
+              重複して請求した場合、お支払いの後・公開の前に投稿が削除または却下された場合は、
+              全額を返金いたします。当方の判断の誤りで非公開にした場合は、公開に戻し、
+              非公開の期間の分だけ掲載期間を延長します（戻せない場合は全額を返金）。
+              詳しくは利用規約第5条をご覧ください。
             </span>
           </Row>
           <Row label="動作環境">

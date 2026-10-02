@@ -13,7 +13,7 @@ export const SITE = {
   nameLatin: "NAKADACHI",
   tagline: "地域で、ゆずる・かす・たのむ。",
   description:
-    "住んでいる地域を選んで、ものの売り買い・ゆずりあい・貸し借り・手伝い・お仕事を掲載できます。閲覧と会員登録は無料です。",
+    "住んでいる地域を選んで、ものの売り買い・ゆずりあい・貸し借り・手伝いを掲載できます。閲覧と会員登録は無料です。",
 
   /** 本番の正規オリジン。実行時は env.APP_ORIGIN を優先すること */
   canonicalOrigin: "https://nakadachi.rewrite-co.com",

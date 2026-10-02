@@ -540,6 +540,107 @@ describe("★投稿を非公開にする★", () => {
       .from(listings)
       .where(eq(listings.id, listingId));
     expect(row!.publishedAt!.getTime()).toBe(publishedAt.getTime());
+    // 止めていた時間（ここでは数ミリ秒）の分だけ延びる。30日には戻らない。
+    const extendedMs = row!.expiresAt!.getTime() - expiresAt.getTime();
+    expect(extendedMs).toBeGreaterThanOrEqual(0);
+    expect(extendedMs).toBeLessThan(60_000);
+  });
+
+  it("★公開に戻すと、止めていた期間の分だけ掲載期間が延びる★", async () => {
+    /*
+     * 戻すのは «運営者の判断の誤り» のとき。止めていた間は見えなかったので、
+     * その分を延ばさないと払った掲載期間を削ることになる（2026-10 の返金方針）。
+     */
+    const publishedAt = new Date(Date.now() - 10 * 86_400_000);
+    const expiresAt = new Date(Date.now() + 20 * 86_400_000);
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt,
+      expiresAt,
+    });
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "suspend", reason: "確認のため一時的に非公開" },
+    });
+    // 止めたのを5日前にずらす（止めていた期間＝5日）
+    await db
+      .update(listings)
+      .set({ closedAt: new Date(Date.now() - 5 * 86_400_000) })
+      .where(eq(listings.id, listingId));
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "判断の誤りだったため公開に戻す" },
+    });
+
+    const [row] = await db
+      .select({ publishedAt: listings.publishedAt, expiresAt: listings.expiresAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.publishedAt!.getTime()).toBe(publishedAt.getTime());
+    const extendedDays = (row!.expiresAt!.getTime() - expiresAt.getTime()) / 86_400_000;
+    expect(extendedDays).toBeGreaterThan(4.99);
+    expect(extendedDays).toBeLessThan(5.01);
+  });
+
+  it("★公開済みの投稿を却下してから戻しても、作り直さず止めていた分だけ延びる★", async () => {
+    const publishedAt = new Date(Date.now() - 10 * 86_400_000);
+    const expiresAt = new Date(Date.now() + 20 * 86_400_000);
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt,
+      expiresAt,
+    });
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "reject", reason: "確認のため却下にする" },
+    });
+    await db
+      .update(listings)
+      .set({ closedAt: new Date(Date.now() - 3 * 86_400_000) })
+      .where(eq(listings.id, listingId));
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "判断の誤りだったため公開に戻す" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status, publishedAt: listings.publishedAt, expiresAt: listings.expiresAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("published");
+    expect(row!.publishedAt!.getTime()).toBe(publishedAt.getTime());
+    const extendedDays = (row!.expiresAt!.getTime() - expiresAt.getTime()) / 86_400_000;
+    expect(extendedDays).toBeGreaterThan(2.99);
+    expect(extendedDays).toBeLessThan(3.01);
+  });
+
+  it("止めた時刻が残っていない古い行は、戻しても延ばさない", async () => {
+    const publishedAt = new Date(Date.now() - 10 * 86_400_000);
+    const expiresAt = new Date(Date.now() + 20 * 86_400_000);
+    const listingId = await makeDraft(db, owner.id, {
+      status: "suspended",
+      publishedAt,
+      expiresAt,
+      closedAt: null,
+    });
+
+    await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "判断の誤りだったため公開に戻す" },
+    });
+
+    const [row] = await db
+      .select({ status: listings.status, expiresAt: listings.expiresAt })
+      .from(listings)
+      .where(eq(listings.id, listingId));
+    expect(row!.status).toBe("published");
     expect(row!.expiresAt!.getTime()).toBe(expiresAt.getTime());
   });
 

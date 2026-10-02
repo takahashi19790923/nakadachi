@@ -192,11 +192,16 @@ export async function notifyListingSuspended(options: {
   logger: Logger;
   listingId: string;
   reason: string;
+  kind: "suspended" | "rejected";
 }): Promise<void> {
   const { db, env, logger, listingId } = options;
 
   const rows = await db
-    .select({ title: listings.title, ownerId: listings.ownerId })
+    .select({
+      title: listings.title,
+      ownerId: listings.ownerId,
+      publishedAt: listings.publishedAt,
+    })
     .from(listings)
     .where(eq(listings.id, listingId))
     .limit(1);
@@ -211,11 +216,14 @@ export async function notifyListingSuspended(options: {
       template: "listing_suspended",
       to: recipient.email,
       content: listingSuspendedEmail({
+        kind: options.kind,
+        wasPublished: listing.publishedAt !== null,
         title: listing.title,
         reason: options.reason,
         contactUrl: new URL("/contact", env.APP_ORIGIN).toString(),
       }),
-      idempotencyKey: `listing_suspended:${listingId}:${Math.floor(Date.now() / 86_400_000)}`,
+      // 非公開と却下でキーを分ける（同じ日に «非公開 → 戻す → 却下» でも却下の案内が届くように）。
+      idempotencyKey: `listing_suspended:${options.kind}:${listingId}:${Math.floor(Date.now() / 86_400_000)}`,
       userId: listing.ownerId,
       listingId,
     },

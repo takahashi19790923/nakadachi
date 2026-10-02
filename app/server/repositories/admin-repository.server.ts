@@ -82,6 +82,24 @@ export async function countSuspendedNeedingReview(
   const row = rows.rows[0];
   return { count: row?.n ?? 0, oldestDays: row?.oldest ?? 0 };
 }
+/**
+ * 利用停止中で、退会のお申し込みがある利用者の数。
+ *
+ * ★停止中は退会の削除を見送る（erasure-service）。★ そのままにすると
+ * 申込は残り続けるので、管理画面に出して対応の終わりを判断できるようにする。
+ */
+export async function countSuspendedWithPendingDeletion(db: Db): Promise<number> {
+  const rows = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n
+    from account_deletion_requests d
+    join users u on u.id = d.user_id
+    where d.status = 'pending'
+      and u.status = 'suspended'
+      and u.deleted_at is null
+  `);
+  return rows.rows[0]?.n ?? 0;
+}
+
 export async function listAuditLogs(db: Db, limit = 200) {
   return db
     .select({

@@ -68,6 +68,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 <p className="mt-1 text-sm text-washi-600">
                   {category.description}
                 </p>
+                {category.acceptsNewListings ? null : (
+                  <p className="mt-1 text-xs text-amber-800">新しい掲載の受け付けを停止中</p>
+                )}
               </Link>
             </li>
           ))}

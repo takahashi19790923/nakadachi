@@ -20,8 +20,11 @@ import {
 import { emailIndexHmac } from "~/server/crypto.server";
 import type { Db } from "~/server/db.server";
 import {
+  hasSuspendedAccountForInbox,
   requestAccountDeletion,
+  setUserStatus,
 } from "~/server/repositories/user-repository.server";
+import { countSuspendedWithPendingDeletion } from "~/server/repositories/admin-repository.server";
 import {
   closeListingsOnDeletionRequest,
   purgeDueAccounts,
@@ -146,6 +149,59 @@ describe("退会の申し込み", () => {
       .from(emailDeliveryLogs)
       .where(eq(emailDeliveryLogs.template, "account_deletion"));
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("★利用停止中の人は、退会の削除を見送る★（監査 AUTH-02）", () => {
+  async function makeDue(email: string): Promise<{ id: string }> {
+    const user = await makeUser(db, email);
+    await requestAccountDeletion(db, user.id);
+    await db
+      .update(accountDeletionRequests)
+      .set({ scheduledPurgeAt: new Date(Date.now() - 1000) })
+      .where(eq(accountDeletionRequests.userId, user.id));
+    return user;
+  }
+
+  it("停止中なら期限が来ても消さず、停止の記録（再登録の拒否）が残る", async () => {
+    const user = await makeDue("evader@example.test");
+    await setUserStatus(db, { userId: user.id, status: "suspended", reason: "検査" });
+    const [before] = await db
+      .select({ canonical: users.emailCanonicalHmac })
+      .from(users)
+      .where(eq(users.id, user.id));
+
+    const result = await purgeDueAccounts({ db, env, logger: testLogger });
+    expect(result.purged).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(await hasSuspendedAccountForInbox(db, before!.canonical!)).toBe(true);
+    expect(await countSuspendedWithPendingDeletion(db)).toBe(1);
+  });
+
+  it("停止を解けば、次の削除で消える", async () => {
+    const user = await makeDue("released@example.test");
+    await setUserStatus(db, { userId: user.id, status: "suspended", reason: "検査" });
+    await purgeDueAccounts({ db, env, logger: testLogger });
+    await setUserStatus(db, { userId: user.id, status: "active", reason: null });
+
+    const result = await purgeDueAccounts({ db, env, logger: testLogger });
+    expect(result.purged).toBe(1);
+    const rows = await db.select({ id: users.id }).from(users).where(eq(users.id, user.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("★停止中の人で1回の枠が埋まっても、ほかの人は消える★", async () => {
+    // 枠（limit）を2にして、停止中2人＋通常1人。停止中を取った後に飛ばす作りだと、通常の人が残る。
+    for (const email of ["s1@example.test", "s2@example.test"]) {
+      const u = await makeDue(email);
+      await setUserStatus(db, { userId: u.id, status: "suspended", reason: "検査" });
+    }
+    const normal = await makeDue("normal@example.test");
+
+    const result = await purgeDueAccounts({ db, env, logger: testLogger, limit: 2 });
+    expect(result.purged).toBe(1);
+    const rows = await db.select({ id: users.id }).from(users).where(eq(users.id, normal.id));
+    expect(rows).toHaveLength(0);
   });
 });
 
