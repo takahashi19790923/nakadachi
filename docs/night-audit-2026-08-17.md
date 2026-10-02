@@ -112,7 +112,7 @@ expireListings=0 reconcilePayments=0`（`wrangler tail` を :59 に張り直し�
 | ログインのレート制限が gmail の別名で回避できる／`CF-Connecting-IP` が無いと IP 制限が素通り | Cloudflare 経由なら IP は必ず付くので実害は小さい | 正規化ルールを決めてから |
 | JavaScript 無効だと決済へ進めない | Turnstile も JS 前提なので、実質は影響なし | noscript の案内だけ出すか |
 | 公開ページのエッジキャッシュ | nonce と CSRF が1回ごとに違うので、そのままでは載せられない | hash ベースの CSP に変える設計が要る。Hyperdrive で往復が減ったので優先度は下がった |
-| Stripe の代表者メールを `h.takahashi0923@gmail.com` へ戻す・本番のテスト投稿2件の後始末 | 前回からの持ち越し | 手作業（Stripe ダッシュボード／管理画面） |
+| Stripe の代表者メールを 運営者の個人用アドレス（省略） へ戻す・本番のテスト投稿2件の後始末 | 前回からの持ち越し | 手作業（Stripe ダッシュボード／管理画面） |
 | dependabot の PR #16〜#18 | codeql-action と patch/minor の更新 | CI が通れば取り込んでよい |
 
 ## 8. 確認したこと（数字）
