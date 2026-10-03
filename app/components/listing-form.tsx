@@ -336,7 +336,7 @@ export function ListingForm({
           maxLength={60}
           defaultValue={listing?.areaNote ?? ""}
           error={errors?.areaNote}
-          hint="例：〇〇駅の近く。★番地・部屋番号は書かないでください。★"
+          hint="例：〇〇駅の近く。番地・部屋番号は書かないでください。"
         />
 
         {/* ── 掲載期間 ─────────────────────────────────────── */}

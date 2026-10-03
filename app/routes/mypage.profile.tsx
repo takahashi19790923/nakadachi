@@ -16,6 +16,7 @@ import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf
 import { toPublicError } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
 import { listPrefectures } from "~/server/repositories/location-repository.server";
+import { findBlockingWord } from "~/server/repositories/moderation-repository.server";
 import {
   getProfile,
   updateProfile,
@@ -59,6 +60,27 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     const parsed = profileUpdateSchema.safeParse(formDataToObject(formData));
     if (!parsed.success) {
       return { fields: toFieldErrors(parsed.error), message: null, saved: false };
+    }
+
+    /*
+     * ★表示名と自己紹介も禁止語を照合する。★（監査 SEC-06）
+     * 表示名は掲載ページとメッセージで相手に見える。以前は投稿の題名と本文しか
+     * 見ていなかった。
+     */
+    // 欄ごとに照合する（欄をまたいで語ができないように・どちらの欄かを示すために）。
+    const fields: Record<string, string> = {};
+    if (await findBlockingWord(context.getDb(), parsed.data.displayName ?? "")) {
+      fields.displayName = "掲載できない語句が含まれています";
+    }
+    if (await findBlockingWord(context.getDb(), parsed.data.bio ?? "")) {
+      fields.bio = "掲載できない語句が含まれています";
+    }
+    if (Object.keys(fields).length > 0) {
+      return {
+        fields,
+        message: "表示名・自己紹介に、掲載できない語句が含まれています。",
+        saved: false,
+      };
     }
 
     await updateProfile(context.getDb(), user.id, {

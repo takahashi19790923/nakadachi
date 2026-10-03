@@ -87,6 +87,13 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
   });
 
   const alreadyPublished = listing.status === "published";
+  /*
+   * ★押すと必ず失敗するボタンを出さない。★（監査 FN-15）
+   * 支払いに進めるのは下書きと決済待ちだけ、内容を直せるのは下書きと公開中だけ
+   * （決済の手続き中は直させない＝払った内容と違う掲載を出さないため）。
+   */
+  const payable = listing.status === "draft" || listing.status === "payment_pending";
+  const editable = listing.status === "draft" || listing.status === "published";
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
@@ -132,23 +139,39 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
         ) : (
           <p className="mt-3 text-sm text-washi-600">
             写真はまだありません。
-            <Link to={`/listings/${listing.id}/images`} className="link ml-1">
-              写真を追加する
-            </Link>
+            {editable ? (
+              <Link to={`/listings/${listing.id}/images`} className="link ml-1">
+                写真を追加する
+              </Link>
+            ) : null}
           </p>
         )}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-3">
-        <Link to={`/listings/${listing.id}/edit`} className="btn btn-secondary">
-          内容を修正する
-        </Link>
-        <Link to={`/listings/${listing.id}/images`} className="btn btn-secondary">
-          写真を編集する
-        </Link>
-      </div>
+      {editable ? (
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Link to={`/listings/${listing.id}/edit`} className="btn btn-secondary">
+            内容を修正する
+          </Link>
+          <Link to={`/listings/${listing.id}/images`} className="btn btn-secondary">
+            写真を編集する
+          </Link>
+        </div>
+      ) : listing.status === "payment_pending" ? (
+        <p className="mt-4 text-sm text-washi-600">
+          お支払いの手続き中は、内容と写真を修正できません。手続きをやめた場合は、
+          1時間ほどで下書きに戻り、修正できるようになります。
+        </p>
+      ) : null}
 
-      {alreadyPublished ? (
+      {!alreadyPublished && !payable ? (
+        <p className="mt-8 rounded-lg bg-washi-100 p-4 text-washi-800">
+          この投稿は、いまはお支払いに進めません。
+          <Link to="/mypage" className="link ml-1">
+            マイページへ戻る
+          </Link>
+        </p>
+      ) : alreadyPublished ? (
         <p className="mt-8 rounded-lg bg-ai-50 p-4 text-ai-900">
           この投稿はすでに公開中です。
           <Link to={`/listings/${listing.id}`} className="link ml-1">

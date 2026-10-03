@@ -6,7 +6,7 @@ import { privatePageMeta } from "~/domain/seo";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
-import { notFound, toPublicError } from "~/server/errors";
+import { AppError, notFound, toPublicError } from "~/server/errors";
 import { assertOwner, requireUser } from "~/server/guards.server";
 import { enforceRateLimit } from "~/server/rate-limit.server";
 import { getListingForOwner } from "~/server/repositories/listing-repository.server";
@@ -22,6 +22,13 @@ import { formString } from "~/domain/validation/common";
 import type { Route } from "./+types/listings.images";
 import { getApp } from "~/server/app-context";
 
+/**
+ * 本人が写真を足し・消しできる状態。本文の編集（listing-service の updateListing）と
+ * そろえる。止められた・終わった投稿は変えさせない。決済の手続き中も変えさせない
+ * （払った内容と違う掲載を出さないため。2026-10 のレビュー）。
+ */
+const PHOTO_EDITABLE_STATUSES: ReadonlySet<string> = new Set(["draft", "published"]);
+
 export async function loader({ request, context: rawContext, params }: Route.LoaderArgs) {
   const context = getApp(rawContext);
   const user = await requireUser({ request, context });
@@ -35,6 +42,8 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     listingId: listing.id,
     title: listing.title,
     images: listing.images,
+    // ★押すと必ず失敗する操作を出さない★（監査 FN-15 の型）
+    editable: PHOTO_EDITABLE_STATUSES.has(listing.status),
     csrfToken: context.csrfToken,
   };
 }
@@ -50,18 +59,30 @@ export async function action({ request, context: rawContext, params }: Route.Act
 
   try {
     assertSameOrigin(request, context.env);
+
+    // ★所有者の確認を、本文（写真）を読む前に行う。★（監査 SEC-04）
+    // 以前は formData を全部読んでから確かめていたので、他人の投稿へ大量に
+    // 送りつけるだけで帯域と処理を消費させられた。
+    const listing = await getListingForOwner(db, params.listingId);
+    if (!listing) throw notFound(`listing not found: ${params.listingId}`);
+    assertOwner(listing.ownerId, user);
+
+    /*
+     * ★停止・却下・終了した投稿の写真は、本人も変えられない。★（監査 AUTHZ-03）
+     * 運営が止めた投稿の写真を本人が消せると、判断の根拠（証拠）が消える。
+     */
+    if (!PHOTO_EDITABLE_STATUSES.has(listing.status)) {
+      throw new AppError("conflict", "この投稿の写真は、いまは変更できません。", {
+        detail: `image change on status=${listing.status}`,
+      });
+    }
+
     const formData = await request.formData();
     await verifyCsrfToken(
       context.env,
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
-
-    // ★所有者の確認をアップロードの前に行う。★ 先に受け取ってしまうと、
-    // 他人の投稿へ大量に送りつけるだけで帯域を消費させられる。
-    const listing = await getListingForOwner(db, params.listingId);
-    if (!listing) throw notFound(`listing not found: ${params.listingId}`);
-    assertOwner(listing.ownerId, user);
 
     const intent = formString(formData, "intent", "upload");
 
@@ -115,7 +136,7 @@ export default function ListingImages({
   loaderData,
   actionData,
 }: Route.ComponentProps) {
-  const { listingId, title, images, csrfToken } = loaderData;
+  const { listingId, title, images, editable, csrfToken } = loaderData;
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
@@ -131,6 +152,11 @@ export default function ListingImages({
 
       <PrivacyWarning />
 
+      {!editable ? (
+        <p className="mt-6 rounded-lg bg-washi-100 p-4 text-washi-800">
+          この投稿の写真は、いまは変更できません（写真を変えられるのは、下書きと公開中の投稿です）。
+        </p>
+      ) : (
       <Form
         method="post"
         encType="multipart/form-data"
@@ -161,6 +187,7 @@ export default function ListingImages({
           アップロードする
         </button>
       </Form>
+      )}
 
       <h2 className="mt-8 text-lg font-bold">現在の写真（{images.length}枚）</h2>
       {images.length === 0 ? (
@@ -177,14 +204,16 @@ export default function ListingImages({
                 loading="lazy"
                 className="aspect-square w-full object-cover"
               />
-              <Form method="post" className="p-2">
-                <CsrfInput token={csrfToken} />
-                <input type="hidden" name="intent" value="remove" />
-                <input type="hidden" name="imageId" value={image.id} />
-                <button type="submit" className="btn btn-danger btn-sm w-full">
-                  削除
-                </button>
-              </Form>
+              {editable ? (
+                <Form method="post" className="p-2">
+                  <CsrfInput token={csrfToken} />
+                  <input type="hidden" name="intent" value="remove" />
+                  <input type="hidden" name="imageId" value={image.id} />
+                  <button type="submit" className="btn btn-danger btn-sm w-full">
+                    削除
+                  </button>
+                </Form>
+              ) : null}
             </li>
           ))}
         </ul>

@@ -14,6 +14,7 @@ import {
   MIN_IMAGE_DIMENSION,
 } from "~/domain/image-limits";
 import { ulid } from "~/domain/ulid.ts";
+import { publishedOnly } from "../../repositories/listing-repository.server.ts";
 import { sha256Hex } from "../../crypto.server.ts";
 import type { Db } from "../../db.server.ts";
 import type { AppEnv } from "../../env.server.ts";
@@ -192,9 +193,14 @@ export interface MediaAccess {
   readonly allowed: boolean;
   readonly objectKey: string;
   readonly contentType: string;
-  /** 公開中の投稿の画像だけ長くキャッシュしてよい */
+  /** 公開中の投稿の画像だけキャッシュしてよい */
   readonly cacheable: boolean;
+  /** キャッシュしてよい秒数。掲載の終了までを上限にする（監査 PRIV-06） */
+  readonly maxAgeSeconds?: number;
 }
+
+/** 公開中の写真をキャッシュしてよい上限（1日） */
+export const MAX_PUBLIC_IMAGE_CACHE_SECONDS = 86_400;
 
 /**
  * 配信してよいかを判断する。
@@ -220,9 +226,15 @@ export async function resolveMediaAccess(options: {
     .select({
       objectKey: listingImages.objectKey,
       contentType: listingImages.contentType,
-      listingStatus: listings.status,
       ownerId: listings.ownerId,
       deletedAt: listingImages.deletedAt,
+      expiresAt: listings.expiresAt,
+      /*
+       * ★公開の判定は掲載の公開判定（publishedOnly）と同じものを使う。★（監査 AUTHZ-02）
+       * 以前は status = 'published' だけを見ていたので、停止した利用者の掲載・
+       * 期限切れ直後の掲載・削除済みの掲載の写真が、誰にでも配られていた。
+       */
+      isPublic: sql<boolean>`(${publishedOnly()})`,
     })
     .from(listingImages)
     .innerJoin(listings, eq(listings.id, listingImages.listingId))
@@ -234,13 +246,21 @@ export async function resolveMediaAccess(options: {
     throw notFound(`media not found: ${options.objectKey}`);
   }
 
-  const isPublic = row.listingStatus === "published";
-  if (isPublic) {
+  if (row.isPublic) {
+    /*
+     * ★キャッシュの期限を掲載の終了より長くしない。★（監査 PRIV-06）
+     * 以前は一律1日＋古い写しを7日まで使ってよい、としていたので、掲載が
+     * 終わった・止まった後も手元や中継のキャッシュで見え続けた。
+     */
+    const secondsLeft = row.expiresAt
+      ? Math.floor((row.expiresAt.getTime() - Date.now()) / 1000)
+      : MAX_PUBLIC_IMAGE_CACHE_SECONDS;
     return {
       allowed: true,
       objectKey: row.objectKey,
       contentType: row.contentType,
       cacheable: true,
+      maxAgeSeconds: Math.max(0, Math.min(MAX_PUBLIC_IMAGE_CACHE_SECONDS, secondsLeft)),
     };
   }
 

@@ -80,37 +80,44 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
      * 利用者が居るとは限らない。素通りさせると下の記録だけが残り、
      * 「停止した」という嘘の履歴ができる。
      */
-    const changed = await setUserStatus(db, {
-      userId,
-      status: intent === "restore" ? "active" : "suspended",
-      reason: intent === "restore" ? null : reason,
-    });
-    if (!changed) {
-      throw new AppError("not_found", "対象の利用者が見つかりませんでした。", {
-        detail: `user not found for admin ${intent}: ${userId}`,
+    /*
+     * ★本処理と管理操作の記録を1つのトランザクションにする。★（監査 ADM-03）
+     * 以前は別々に書いていたので、記録に失敗すると «停止したのに記録が無い»
+     * （誰がいつ止めたか分からない）が起きえた。記録できなければ操作も巻き戻す。
+     */
+    await db.transaction(async (tx) => {
+      const changed = await setUserStatus(tx, {
+        userId,
+        status: intent === "restore" ? "active" : "suspended",
+        reason: intent === "restore" ? null : reason,
       });
-    }
+      if (!changed) {
+        throw new AppError("not_found", "対象の利用者が見つかりませんでした。", {
+          detail: `user not found for admin ${intent}: ${userId}`,
+        });
+      }
 
-    // ★停止したら、その場で全セッションを失効させる。★
-    // 止めても入ったままでは意味がない。
-    if (intent === "suspend") {
-      await revokeAllSessions(db, userId);
-    }
+      // ★停止したら、その場で全セッションを失効させる。★
+      // 止めても入ったままでは意味がない。
+      if (intent === "suspend") {
+        await revokeAllSessions(tx, userId);
+      }
 
-    await writeAdminAction(db, {
-      adminId: admin.id,
-      actionType: intent === "restore" ? "user_restore" : "user_suspend",
-      targetType: "user",
-      targetId: userId,
-      reason: reason || "（復帰）",
-    });
-    await writeAuditLog(db, context.env, {
-      action: `admin.user_${intent}`,
-      actorId: admin.id,
-      actorRole: "admin",
-      targetType: "user",
-      targetId: userId,
-      request,
+      await writeAdminAction(tx, {
+        adminId: admin.id,
+        actionType: intent === "restore" ? "user_restore" : "user_suspend",
+        targetType: "user",
+        targetId: userId,
+        reason: reason || "（復帰）",
+      });
+      await writeAuditLog(tx, context.env, {
+        action: `admin.user_${intent}`,
+        actorId: admin.id,
+        actorRole: "admin",
+        targetType: "user",
+        targetId: userId,
+        request,
+      });
     });
 
     return { message: null, fields: null };

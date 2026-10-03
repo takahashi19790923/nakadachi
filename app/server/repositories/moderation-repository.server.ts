@@ -18,13 +18,35 @@ import type { Db } from "../db.server.ts";
  * 前提の、最初の網でしかない。
  */
 
-/** 照合用に文字を寄せる。全角英数・カタカナ・記号の差を吸収する */
+/**
+ * 照合用に文字を寄せる。全角英数・カタカナ・記号の差を吸収する。
+ *
+ * ★記号・空白・書式用の不可視文字・結合文字をすべて落とす。★（監査 SEC-07）
+ * 以前は決め打ちの記号だけを落としていたので、ゼロ幅文字・括弧・＋・：・絵文字を
+ * 挟んだ «闇\u200Bバイト» «闇(バイト)» が block も flag も素通りした。
+ * 長音符「ー」は文字（Lm）なので残る。
+ *
+ * ★ただし文の区切り（。、！？ と改行）はまたがない。★ 区切りで分けてから寄せ、
+ * 区切りは改行で残す（禁止語は改行を含まないので、改行をまたいで一致しない）。
+ * 全部落とすと «貸し出し。子ども用です» が «出し子» に当たり、正当な投稿が作れない
+ * （2026-10 のレビュー）。
+ */
 export function normalizeForMatching(text: string): string {
   return text
     .normalize("NFKC")
     .toLowerCase()
-    // 伏せ字に使われやすい記号と空白を落とす
-    .replace(/[\s・.,\-_*＊●○◯~〜"'`|/\\]/g, "");
+    .split(/[。.、,!?;\r\n]+/u)
+    .map((segment) => segment.replace(/[\s\p{P}\p{S}\p{Cf}\p{Cc}\p{Mn}\p{Me}]/gu, ""))
+    .filter((segment) => segment !== "")
+    .join("\n");
+}
+
+/**
+ * 禁止語そのものを保存する形。照合用に寄せたうえで、区切りも落とす
+ * （語の中に区切りがあると、照合側の改行と一致せず永久に当たらない）。
+ */
+export function normalizeBannedWord(word: string): string {
+  return normalizeForMatching(word).replace(/\n/g, "");
 }
 
 /**
@@ -55,6 +77,34 @@ export async function findBlockingWord(
 }
 
 /** severity=flag の語。投稿は通すが管理者の確認待ちに入れる */
+/**
+ * 文の区切りを取り除いた形で、block の語が当たるか（止めずに確認待ちへ回す用）。
+ *
+ * normalizeForMatching は区切りをまたがないので、«闇。バイト» のように区切りを
+ * 挟むと block をすり抜ける。止めると «貸し出し。子ども用» のような正当な投稿まで
+ * 止まるので、ここは «人が見る» 側に回す。短い語（3文字以下）は区切りまたぎで
+ * 偶然できやすいので対象にしない（2026-10 のレビュー）。
+ */
+export async function findBlockingWordAcrossBreaks(
+  db: Db,
+  text: string,
+): Promise<string | null> {
+  const joined = normalizeForMatching(text).replace(/\n/g, "");
+  if (joined === "") return null;
+  const rows = await db
+    .select({ word: bannedWords.word })
+    .from(bannedWords)
+    .where(
+      and(
+        eq(bannedWords.severity, "block"),
+        sql`char_length(${bannedWords.word}) >= 4`,
+        sql`position(lower(${bannedWords.word}) in ${joined}) > 0`,
+      ),
+    )
+    .limit(1);
+  return rows[0]?.word ?? null;
+}
+
 export async function findFlaggedWords(
   db: Db,
   text: string,
@@ -98,22 +148,26 @@ export async function addBannedWord(
     note?: string;
     createdBy: string;
   },
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const inserted = await db
     .insert(bannedWords)
     .values({
       id: ulid(),
-      word: normalizeForMatching(options.word),
+      word: normalizeBannedWord(options.word),
       severity: options.severity,
       note: options.note ?? null,
       createdBy: options.createdBy,
     })
     // 同じ語を二重に登録しても失敗させない（管理画面で連打されうる）。
     .onConflictDoNothing({ target: bannedWords.word });
+  // ★足したかどうかを返す。★ 既にある語で «追加した» と記録しないため（記録＝事実）。
+  return (inserted.rowCount ?? 0) > 0;
 }
 
-export async function removeBannedWord(db: Db, id: string): Promise<void> {
-  await db.delete(bannedWords).where(eq(bannedWords.id, id));
+/** 消したかどうかを返す。無い id で «削除した» と記録しないため */
+export async function removeBannedWord(db: Db, id: string): Promise<boolean> {
+  const deleted = await db.delete(bannedWords).where(eq(bannedWords.id, id));
+  return (deleted.rowCount ?? 0) > 0;
 }
 
 // ── 通報 ──────────────────────────────────────────────────────────

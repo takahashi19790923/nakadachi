@@ -938,6 +938,18 @@ describe("★通報に対応する★", () => {
   });
 });
 
+describe("★いまの状態でできない操作は «できません» と返す（E-4-1）★", () => {
+  it("下書きを «公開に戻す» と、汎用エラーではなく状態の説明を返す", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "draft" });
+    const result = await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "状態の説明の検査" },
+    });
+    expect(result.message).toBe("この投稿の状態では、その操作はできません。");
+  });
+});
+
 // ── 決済待ちの投稿の却下で、支払いリンクを失効させる（監査 ADM-15）────────
 
 describe("★管理者が決済待ちの投稿を却下すると、生きた支払いリンクを失効させる★", () => {
