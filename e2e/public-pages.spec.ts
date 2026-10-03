@@ -364,3 +364,61 @@ test.describe("見つからないときの応答", () => {
     }
   });
 });
+
+/**
+ * ★応答の形は «本番のビルド» でしか確かめられない。★（監査 AUTH-08・HDR-01〜06）
+ *
+ * React Router は本番のときだけ、Response 以外の例外を «Unexpected Server Error»・500 に
+ * 置き換える。開発サーバーと統合検査では置き換えないので、そこが緑でも本番は 500 だった。
+ * E2E は本番ビルド（vite preview）に当てるので、ここで実際の状態コードを見る。
+ */
+test.describe("応答の形（本番ビルド）", () => {
+  test("★照合に落ちた POST は 403 で、500 にならない★", async ({ request, baseURL }) => {
+    // CSRF のトークンを付けずにログアウトを送る。状態は何も変わらない。
+    const response = await request.post("/logout", {
+      headers: { origin: new URL(baseURL!).origin },
+      form: { intent: "logout" },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
+    expect(response.status()).toBe(403);
+    const body = await response.text();
+    expect(body).toContain("セッションの確認に失敗しました");
+    expect(body).not.toContain("Unexpected Server Error");
+  });
+
+  test("★共有キャッシュに置く応答には Cookie を付けない★", async ({ request }) => {
+    for (const path of ["/robots.txt", "/sitemap.xml"]) {
+      const response = await request.get(path, { failOnStatusCode: false });
+      expect(response.headers()["cache-control"], path).toContain("public");
+      const cookies = response
+        .headersArray()
+        .filter((header) => header.name.toLowerCase() === "set-cookie");
+      expect(cookies, path).toEqual([]);
+    }
+  });
+
+  test("Cache-Control を決めていない応答は private, no-store", async ({ request }) => {
+    // ログインへの転送（Set-Cookie が付く）
+    const redirect = await request.get("/mypage", { maxRedirects: 0, failOnStatusCode: false });
+    expect(redirect.status()).toBeGreaterThanOrEqual(300);
+    expect(redirect.status()).toBeLessThan(400);
+    expect(redirect.headers()["cache-control"]).toBe("private, no-store");
+
+    // 画面遷移で読む中身（.data）
+    const data = await request.get("/legal/terms.data", { failOnStatusCode: false });
+    expect(data.headers()["cache-control"]).toBe("private, no-store");
+  });
+
+  test("監視の口にもセキュリティヘッダが付く", async ({ request }) => {
+    const response = await request.get("/api/health", { failOnStatusCode: false });
+    expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers()["x-frame-options"]).toBe("DENY");
+    expect(response.headers()["cache-control"]).toBe("no-store");
+  });
+
+  test("エラーの画面にも題名がある", async ({ page }) => {
+    await page.goto("/this-path-does-not-exist");
+    await expect(page).toHaveTitle(/ページが見つかりません/);
+  });
+});

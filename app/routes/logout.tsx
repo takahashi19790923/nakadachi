@@ -3,6 +3,7 @@ import { redirect } from "react-router";
 import { clearGateCookie } from "~/server/admin-gate.server";
 import { writeAuditLog } from "~/server/audit.server";
 import { assertCsrf } from "~/server/csrf.server";
+import { asRouteError } from "~/server/errors";
 import { loadUser } from "~/server/guards.server";
 import { destroySession } from "~/server/session.server";
 import type { Route } from "./+types/logout";
@@ -21,7 +22,12 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
   const context = getApp(rawContext);
   // ★他の状態変更と同じ二重の照合（Origin ＋ 署名付きトークン）。★
   // ここだけ Origin 照合のみだったので、設計上の穴として1か所残っていた。
-  await assertCsrf(request, context.env, await request.formData());
+  try {
+    await assertCsrf(request, context.env, await request.formData());
+  } catch (error) {
+    // 古いタブからのログアウトなどで照合に落ちたときに 500 にしない（asRouteError の説明）。
+    throw asRouteError(error);
+  }
 
   /*
    * ★誰がログアウトしたかは、セッションを壊す前に読む。★

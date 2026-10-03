@@ -22,13 +22,15 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   const user = await requireUser({ request, context });
   if (!isUlid(params.listingId)) throw notFound("malformed id");
 
-  /*
-   * ★読むだけに見えるが、行が増える。★ ensureThread は会話を作る。
-   * 投稿を変えながら開き続ければ、相手の受信箱を埋められる。
-   */
-  await enforceRateLimit(context.getDb(), "threadCreate", user.id);
-
   try {
+    /*
+     * ★読むだけに見えるが、行が増える。★ ensureThread は会話を作る。
+     * 投稿を変えながら開き続ければ、相手の受信箱を埋められる。
+     * ★try の中で数える。★ 外に置くと、上限に当たったときに本番では
+     * «エラー 500» になっていた（監査 E-10-1。下の catch の説明と同じ理由）。
+     */
+    await enforceRateLimit(context.getDb(), "threadCreate", user.id);
+
     const { threadId } = await ensureThread({
       db: context.getDb(),
       listingId: params.listingId,

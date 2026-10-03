@@ -1,3 +1,5 @@
+import { data } from "react-router";
+
 /**
  * エラーの型。
  *
@@ -173,4 +175,34 @@ export function toPublicError(error: unknown): {
     message:
       "処理中に問題が発生しました。時間をおいてもう一度お試しください。",
   };
+}
+
+/** asRouteError で包んだときに ErrorBoundary が受け取る中身 */
+export interface RouteErrorData {
+  readonly message: string;
+}
+
+/**
+ * loader・action の外へ出す前に、AppError を «伏せられない形» に変える。（監査 AUTH-08）
+ *
+ * ★本番の React Router は、Response 以外の例外を一律 «Unexpected Server Error»・
+ * 500 に置き換える。★（node_modules/react-router の server-runtime/errors.js の
+ * sanitizeError。開発中は置き換えないので、手元では正しく見える。）
+ * 回数制限の 429 も CSRF の 403 も本番では 500 になり、画面は «問題が発生しました»、
+ * 監視は «サーバー障害» と読む。entry.server.tsx の補正も、伏せた後の値しか見えない。
+ *
+ * data() で投げたものは «ルートのエラー応答» として扱われ、状態と中身がそのまま
+ * ErrorBoundary に届く。中身は利用者向けの文言だけ（detail は載せない）。
+ * それ以外の例外はそのまま返す（本物の障害は 500 のままでよい）。
+ *
+ * 使い方: try/catch で受けずに外へ出していた loader・action を
+ * `try { … } catch (error) { throw asRouteError(error); }` で包む。
+ */
+export function asRouteError(error: unknown): unknown {
+  if (error instanceof Response) return error;
+  if (isAppError(error)) {
+    const body: RouteErrorData = { message: error.message };
+    return data(body, { status: error.status });
+  }
+  return error;
 }

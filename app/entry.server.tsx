@@ -12,10 +12,12 @@ export const streamTimeout = 5_000;
 /**
  * ErrorBoundary へ届いた AppError を、正しい HTTP ステータスで返すための保険。
  *
- * 404・403 は errors.ts が Response を投げるので、ここへは来ない。
- * ここで拾うのは「投げ分けていない」もの——レート制限（429）や
- * ConfigurationError（503）が、ローダーの中から素通りしてきた場合。
- * 放っておくと全部 500 になり、監視は「サーバー障害」と読んでしまう。
+ * ★本番では効かない。開発中だけ。★（監査 AUTH-08）
+ * 本番の React Router は、ここへ渡す前に Response 以外の例外を
+ * «Unexpected Server Error» に置き換える（server-runtime の sanitizeErrors）。
+ * isAppError が真になるのは開発中だけで、本番では 500 のまま返っていた。
+ * 本番で正しい番号を返すには、loader・action の外へ AppError を漏らさない
+ * （try/catch で受けて画面に出すか、errors.ts の asRouteError で包んで投げる）。
  */
 function resolveStatus(routerContext: EntryContext, fallback: number): number {
   const errors: unknown = routerContext.staticHandlerContext.errors;

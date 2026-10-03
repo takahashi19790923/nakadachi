@@ -104,9 +104,13 @@ export function applySecurityHeaders(
    * 瞬間に「画面は出るがボタンが効かない」「最初の送信が CSRF で落ちる」になる。
    * ブラウザ自身の戻る／進むは no-store でも近年は動く（bfcache）。
    * 自分で Cache-Control を決めた応答（/media, sitemap, robots, API）は触らない。
+   *
+   * ★HTML 以外も同じ。★（監査 HDR-04・HDR-06）以前は text/html だけに付けていて、
+   * 画面遷移で読む `.data`（マイページやメッセージの中身そのもの）、ログインへの
+   * 302（CSRF の Set-Cookie つき）、API の 404 には何も付いていなかった。
+   * 決めていない応答はすべて private, no-store に倒す。
    */
-  const contentType = headers.get("content-type") ?? "";
-  if (!headers.has("cache-control") && contentType.includes("text/html")) {
+  if (!headers.has("cache-control")) {
     headers.set("Cache-Control", "private, no-store");
   }
 
@@ -115,6 +119,20 @@ export function applySecurityHeaders(
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * 共有キャッシュ（中継・CDN）に保存してよいと宣言した応答か。
+ *
+ * ★こういう応答には Set-Cookie を足さない。★（監査 HDR-02）
+ * robots.txt・sitemap.xml・公開中の写真は public で返す。そこへ CSRF やセッションの
+ * Cookie を足すと、共有キャッシュが Cookie ごと覚えて、次の人に同じ値を配りうる
+ * （Cloudflare の既定の扱いは確かめていない。確かめていないので頼らない）。
+ */
+export function isSharedCacheable(headers: Headers): boolean {
+  const cacheControl = (headers.get("cache-control") ?? "").toLowerCase();
+  if (/(^|[\s,])(private|no-store)([\s,=]|$)/.test(cacheControl)) return false;
+  return /(^|[\s,])(public|s-maxage)([\s,=]|$)/.test(cacheControl);
 }
 
 /** 1リクエストにつき1つ。推測できないことが CSP の前提 */

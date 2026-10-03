@@ -3,7 +3,7 @@ import { redirect } from "react-router";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
-import { notFound } from "~/server/errors";
+import { asRouteError, notFound } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
 import { toggleFavorite } from "~/server/services/engagement-service.server";
 import type { Route } from "./+types/listings.favorite";
@@ -20,20 +20,25 @@ export async function action({ request, context: rawContext, params }: Route.Act
   if (!isUlid(params.listingId)) throw notFound("malformed id");
 
   const formData = await request.formData();
-  assertSameOrigin(request, context.env);
-  await verifyCsrfToken(
-    context.env,
-    formData.get("_csrf"),
-    readCookie(request, csrfCookieName(context.env)),
-  );
+  try {
+    assertSameOrigin(request, context.env);
+    await verifyCsrfToken(
+      context.env,
+      formData.get("_csrf"),
+      readCookie(request, csrfCookieName(context.env)),
+    );
 
-  const intent = formData.get("intent") === "remove" ? "remove" : "add";
-  await toggleFavorite({
-    db: context.getDb(),
-    userId: user.id,
-    listingId: params.listingId,
-    desired: intent,
-  });
+    const intent = formData.get("intent") === "remove" ? "remove" : "add";
+    await toggleFavorite({
+      db: context.getDb(),
+      userId: user.id,
+      listingId: params.listingId,
+      desired: intent,
+    });
+  } catch (error) {
+    // CSRF の照合に落ちた（古いタブなど）ときに 500 にしない（asRouteError の説明）。
+    throw asRouteError(error);
+  }
 
   // 元の画面へ戻す。戻り先はパスだけを受け付ける（オープンリダイレクト対策）。
   return redirect(`/listings/${params.listingId}`);
