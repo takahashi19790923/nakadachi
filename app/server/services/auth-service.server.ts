@@ -26,7 +26,7 @@ import {
   hasSuspendedAccountForInbox,
   type UserRecord,
 } from "../repositories/user-repository.server.ts";
-import { clientIp } from "../session.server.ts";
+import { clientIp, rateLimitIp } from "../session.server.ts";
 import { getSiteFlags, pausedError } from "./site-flags.server.ts";
 import { sendEmail } from "./email/email-service.server.ts";
 import { loginCodeEmail } from "./email/templates.server.ts";
@@ -41,10 +41,14 @@ import { loginCodeEmail } from "./email/templates.server.ts";
  *  - 試行回数の上限とレート制限で 6桁 OTP の総当たりを止める
  */
 
-/** 15分。長くすると、メールを覗かれたときに使える時間が延びる */
-const TOKEN_TTL_MINUTES = 15;
+/**
+ * 15分。長くすると、メールを覗かれたときに使える時間が延びる。
+ * ★延ばすなら authVerifyByToken の窓も合わせる。★ 窓がトークンの寿命より短いと、
+ * 窓が切れた後の同時の試行が上限をすり抜ける（auth.test.ts が見張っている）。
+ */
+export const TOKEN_TTL_MINUTES = 15;
 /** OTP の入力を何回まで許すか。6桁は100万通りしかない */
-const MAX_OTP_ATTEMPTS = 5;
+export const MAX_OTP_ATTEMPTS = 5;
 
 export interface LoginRequestResult {
   /** 画面に出す文言は成功・失敗で変えない。ここは常に true */
@@ -84,12 +88,11 @@ export async function requestLoginCode(options: {
    * （メールでしか入れない）ので全員が締め出される。窓を短くすると
    * 正規の利用者が困るので、上限を2段にして1日側で頭を押さえる。
    */
+  // IP が無くても飛ばさない（rateLimitIp の説明）。記録の列には実際の IP だけを入れる。
   const ip = clientIp(request);
-  if (ip) {
-    const ipHash = await hashIp(sessionSecret, ip);
-    await enforceRateLimit(db, "authRequestByIp", ipHash);
-    await enforceRateLimit(db, "authRequestByIpDaily", ipHash);
-  }
+  const ipHash = await hashIp(sessionSecret, rateLimitIp(request));
+  await enforceRateLimit(db, "authRequestByIp", ipHash);
+  await enforceRateLimit(db, "authRequestByIpDaily", ipHash);
   // アドレス単位でも絞る。他人のアドレスへ大量に送りつける嫌がらせを防ぐ。
   // ★受信箱単位で数える。★ 記号を足して別枠にされないように。
   await enforceRateLimit(db, "authRequestByEmail", canonicalHmac);
@@ -335,10 +338,11 @@ export async function verifyLoginOtp(options: {
     email,
   );
 
-  const ip = clientIp(request);
-  if (ip) {
-    await enforceRateLimit(db, "authVerifyByIp", await hashIp(sessionSecret, ip));
-  }
+  await enforceRateLimit(
+    db,
+    "authVerifyByIp",
+    await hashIp(sessionSecret, rateLimitIp(request)),
+  );
 
   const rows = await db
     .select({
@@ -369,8 +373,12 @@ export async function verifyLoginOtp(options: {
     });
   }
 
-  await enforceRateLimit(db, "authVerifyByToken", row.id);
-
+  /*
+   * ★試行回数の上限を、トークン単位の回数制限より先に見る。★（監査 AUTH-06）
+   * 以前は逆の順で、どちらも «5回» なので6回目は必ず回数制限で止まり、
+   * 「上限でトークンごと捨てる」処理に一度も届かなかった。トークンは生きたまま
+   * 15分後にまた5回試せて、6回目以降は失敗の記録も残らなかった。
+   */
   if (row.attemptCount >= MAX_OTP_ATTEMPTS) {
     // 上限に達したら、そのトークン自体を捨てる。
     await db
@@ -383,6 +391,10 @@ export async function verifyLoginOtp(options: {
       detail: "attempt limit reached",
     });
   }
+
+  // 同時に送られた試行は、上の attemptCount を同じ値で読んですり抜けうる。
+  // 数え上げが原子的なこちらで、同時の分も5回に抑える。
+  await enforceRateLimit(db, "authVerifyByToken", row.id);
 
   await db
     .update(emailVerificationTokens)
@@ -419,14 +431,11 @@ export async function verifyLoginLink(options: {
 }): Promise<VerifiedIdentity> {
   const { db, env, request, token } = options;
 
-  const ip = clientIp(request);
-  if (ip) {
-    await enforceRateLimit(
-      db,
-      "authVerifyByIp",
-      await hashIp(requireSecret(env, "SESSION_SECRET"), ip),
-    );
-  }
+  await enforceRateLimit(
+    db,
+    "authVerifyByIp",
+    await hashIp(requireSecret(env, "SESSION_SECRET"), rateLimitIp(request)),
+  );
 
   const tokenHash = await sha256Hex(token);
   const rows = await db

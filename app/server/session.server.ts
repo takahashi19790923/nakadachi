@@ -302,3 +302,16 @@ export async function purgeExpiredSessions(db: Db): Promise<number> {
 export function clientIp(request: Request): string | null {
   return request.headers.get("cf-connecting-ip");
 }
+
+/**
+ * 回数制限の主体にする IP。
+ *
+ * ★IP が無いときも制限を飛ばさない。★（監査 SEC-03）
+ * 以前は «IP があるときだけ数える» で、ヘッダが無い経路は IP 単位の制限を
+ * 丸ごと素通りしていた。本番では Cloudflare が必ず付けるが、付かない経路が
+ * 1つでもあれば総当たりと送信の枠の使い切りがそこから通る。無いものは
+ * まとめて «unknown» の1枠で数える（正規の利用者はここに入らない）。
+ */
+export function rateLimitIp(request: Request): string {
+  return clientIp(request) ?? "unknown";
+}

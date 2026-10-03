@@ -23,7 +23,7 @@ import { maskEmail } from "~/server/logger.server";
 import { enforceRateLimit } from "~/server/rate-limit.server";
 import { sendEmail } from "~/server/services/email/email-service.server";
 import { contactInboundEmail } from "~/server/services/email/templates.server";
-import { clientIp } from "~/server/session.server";
+import { clientIp, rateLimitIp } from "~/server/session.server";
 import { hashIp } from "~/server/crypto.server";
 import { requireSecret } from "~/server/env.server";
 import { verifyTurnstile } from "~/server/turnstile.server";
@@ -73,14 +73,12 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       readCookie(request, csrfCookieName(context.env)),
     );
 
-    const ip = clientIp(request);
-    if (ip) {
-      await enforceRateLimit(
-        context.getDb(),
-        "contactSend",
-        await hashIp(requireSecret(context.env, "SESSION_SECRET"), ip),
-      );
-    }
+    // IP が無くても飛ばさない（rateLimitIp の説明）。
+    await enforceRateLimit(
+      context.getDb(),
+      "contactSend",
+      await hashIp(requireSecret(context.env, "SESSION_SECRET"), rateLimitIp(request)),
+    );
 
     const parsed = contactSchema.safeParse({
       ...formDataToObject(formData),

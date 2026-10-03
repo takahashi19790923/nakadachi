@@ -3,6 +3,7 @@ import { redirect } from "react-router";
 import { safeRedirectPath } from "~/domain/validation/common";
 import { expireCookie } from "~/server/cookies.server";
 import { createSession } from "~/server/session.server";
+import { recordAccess } from "~/server/services/access-record-service.server";
 import { verifyLoginLink } from "~/server/services/auth-service.server";
 import { LOGIN_EMAIL_COOKIE } from "./login";
 import type { Route } from "./+types/login.link";
@@ -27,7 +28,7 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
   }
 
   try {
-    const { user } = await verifyLoginLink({
+    const { user, isNewUser } = await verifyLoginLink({
       db: context.getDb(),
       env: context.env,
       logger: context.logger,
@@ -40,6 +41,21 @@ export async function loader({ request, context: rawContext }: Route.LoaderArgs)
       env: context.env,
       userId: user.id,
       request,
+    });
+
+    /*
+     * ★リンクでのログイン・登録も発信者情報に残す。★（監査 PRIV-04）
+     * 以前は6桁のコードの経路（login.verify.tsx）だけが記録していた。メールの
+     * 主ボタンはこちらなので、ログインと新規登録の大半が記録から漏れ、
+     * プライバシーポリシーの «登録・ログインのときの IP を記録» と食い違っていた。
+     */
+    await recordAccess({
+      db: context.getDb(),
+      env: context.env,
+      logger: context.logger,
+      request,
+      action: isNewUser ? "signup" : "login",
+      userId: user.id,
     });
 
     const headers = new Headers();
