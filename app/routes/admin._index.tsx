@@ -147,7 +147,7 @@ export default function AdminDashboard({ loaderData }: Route.ComponentProps) {
           {staleSuspended.count} 件あります（最長 {staleSuspended.oldestDays} 日）。
           <span className="mt-1 block text-sm">
             停止した投稿は<strong>自動では削除されません</strong>。
-            対応が終わっているなら削除してください（削除から180日で本文も消えます）。
+            対応が終わっているなら削除してください（削除すると、停止した日から180日で本文も消えます）。
             対応中ならそのままで構いません。
           </span>
           <Link to="/admin/listings?status=suspended" className="link">

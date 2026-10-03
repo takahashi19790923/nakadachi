@@ -80,10 +80,23 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     context.defer(incrementViewCount(db, listing.id).catch(() => undefined));
   }
 
+  /*
+   * ★画面で使わない内部の値はブラウザへ渡さない。★（監査 PRIV-05）
+   * loader の戻り値はそのまま HTML とデータ応答に載る。以前は投稿者の内部 ID・
+   * 登録日時・閲覧数・作成日時などが、表示していないのに誰にでも渡っていた。
+   */
+  const {
+    ownerId: _ownerId,
+    viewCount: _viewCount,
+    createdAt: _createdAt,
+    durationDays: _durationDays,
+    moderationReason: _moderationReason,
+    ...publicListing
+  } = listing;
+
   return {
-    listing,
+    listing: publicListing,
     ownerName: owner?.displayName ?? "退会したユーザー",
-    ownerJoinedAt: owner?.joinedAt?.toISOString() ?? null,
     favorited,
     isOwner: viewer?.id === listing.ownerId,
     isLoggedIn: viewer !== null,

@@ -2,6 +2,7 @@ import { Form, Link, redirect } from "react-router";
 
 import { CsrfInput } from "~/components/form";
 import {
+  blockedCloseMessage,
   CLOSE_PAGE_HEADING,
   CLOSE_PAGE_INTENT,
   CLOSE_PAGE_TITLE,
@@ -89,12 +90,9 @@ export default function CloseListing({
         <h1 className="text-2xl font-bold text-washi-900">
           {CLOSE_PAGE_HEADING.blocked}
         </h1>
-        <p className="mt-4 text-washi-700">
-          お支払いの確認中です。確認が終わってから、あらためて操作してください。
-          確認が取れなかった場合は下書きに戻ります。
-        </p>
-        <Link to="/mypage/drafts" className="btn btn-secondary mt-6">
-          下書き一覧へ戻る
+        <p className="mt-4 text-washi-700">{blockedCloseMessage(status)}</p>
+        <Link to="/mypage" className="btn btn-secondary mt-6">
+          マイページへ戻る
         </Link>
       </div>
     );

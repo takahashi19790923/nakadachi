@@ -115,9 +115,10 @@ function toSummaries(rows: SummaryRow[]): ListingSummary[] {
   }));
 }
 
-function publishedOnly() {
+export function publishedOnly() {
   // ★公開判定はこの1か所だけ。★ 各画面で status を組み立て直すと、
-  // どこか1つで期限切れや非公開が漏れる。
+  // どこか1つで期限切れや非公開が漏れる。写真の配信（media-service）もこれを使う
+  // （監査 AUTHZ-02。以前は status だけを見ていて、停止した人の写真が配られていた）。
   return and(
     eq(listings.status, "published"),
     isNull(listings.deletedAt),

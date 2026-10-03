@@ -2,6 +2,7 @@ import { Form, Link } from "react-router";
 
 import { CsrfInput, ErrorSummary, TextAreaField } from "~/components/form";
 import { StatusBadge } from "~/components/ui";
+import { allowedTransitions, InvalidTransitionError } from "~/domain/listing-status";
 import { formatDateTimeJa } from "~/domain/listing-view";
 import { privatePageMeta } from "~/domain/seo";
 import { isUlid } from "~/domain/ulid";
@@ -92,34 +93,38 @@ export async function action({ request, context: rawContext, params }: Route.Act
       });
     }
 
-    await transitionListing(db, {
-      listingId: params.listingId,
-      to: target,
-      actor: "admin",
-      moderationReason: reason,
-    });
+    // ★本処理と管理操作の記録を1つのトランザクションにする。★（監査 ADM-03）
+    // 記録に失敗したら操作も巻き戻す（«止めたのに記録が無い» を作らない）。
+    await db.transaction(async (tx) => {
+      await transitionListing(tx, {
+        listingId: params.listingId,
+        to: target,
+        actor: "admin",
+        moderationReason: reason,
+      });
 
-    await writeAdminAction(db, {
-      adminId: admin.id,
-      actionType:
-        target === "suspended"
-          ? "listing_suspend"
-          : target === "rejected"
-            ? "listing_reject"
-            : target === "deleted"
-              ? "listing_delete"
-              : "listing_restore",
-      targetType: "listing",
-      targetId: params.listingId,
-      reason,
-    });
-    await writeAuditLog(db, context.env, {
-      action: `admin.listing_${target}`,
-      actorId: admin.id,
-      actorRole: "admin",
-      targetType: "listing",
-      targetId: params.listingId,
-      request,
+      await writeAdminAction(tx, {
+        adminId: admin.id,
+        actionType:
+          target === "suspended"
+            ? "listing_suspend"
+            : target === "rejected"
+              ? "listing_reject"
+              : target === "deleted"
+                ? "listing_delete"
+                : "listing_restore",
+        targetType: "listing",
+        targetId: params.listingId,
+        reason,
+      });
+      await writeAuditLog(tx, context.env, {
+        action: `admin.listing_${target}`,
+        actorId: admin.id,
+        actorRole: "admin",
+        targetType: "listing",
+        targetId: params.listingId,
+        request,
+      });
     });
 
     // ★非公開にしても自動返金はしない。★ 返金は決済状況の画面から明示的に行う。
@@ -139,6 +144,13 @@ export async function action({ request, context: rawContext, params }: Route.Act
     return { fields: null, message: null };
   } catch (error) {
     if (error instanceof Response) throw error;
+    /*
+     * ★状態の上でできない操作は、そう伝える。★（監査 E-4-1）
+     * 以前は «処理中に問題が発生しました» の汎用文言とエラーログに化けていた。
+     */
+    if (error instanceof InvalidTransitionError) {
+      return { fields: null, message: "この投稿の状態では、その操作はできません。" };
+    }
     context.logger.error("admin listing action failed", error);
     const publicError = toPublicError(error);
     return { fields: publicError.fields ?? null, message: publicError.message };
@@ -150,6 +162,7 @@ export default function AdminListingDetail({
   actionData,
 }: Route.ComponentProps) {
   const { listing, csrfToken } = loaderData;
+  const allowed = new Set(allowedTransitions(listing.status, "admin"));
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
@@ -206,33 +219,47 @@ export default function AdminListingDetail({
           hint="投稿者への通知にも使われます。監査ログに残ります。"
         />
 
+        {/*
+          ★押すと必ず失敗するボタンを出さない。★（監査 FN-15・E-4-1）
+          出すのは、遷移表がいまの状態から管理者に許している操作だけ。
+        */}
         <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            type="submit"
-            name="intent"
-            value="suspend"
-            className="btn btn-danger"
-          >
-            非公開にする
-          </button>
-          <button
-            type="submit"
-            name="intent"
-            value="reject"
-            className="btn btn-danger"
-          >
-            却下する
-          </button>
-          <button
-            type="submit"
-            name="intent"
-            value="restore"
-            className="btn btn-secondary"
-          >
-            公開に戻す
-          </button>
+          {allowed.has("suspended") ? (
+            <button
+              type="submit"
+              name="intent"
+              value="suspend"
+              className="btn btn-danger"
+            >
+              非公開にする
+            </button>
+          ) : null}
+          {allowed.has("rejected") ? (
+            <button
+              type="submit"
+              name="intent"
+              value="reject"
+              className="btn btn-danger"
+            >
+              却下する
+            </button>
+          ) : null}
+          {allowed.has("published") ? (
+            <button
+              type="submit"
+              name="intent"
+              value="restore"
+              className="btn btn-secondary"
+            >
+              公開に戻す
+            </button>
+          ) : null}
+          {allowed.size === 0 ? (
+            <p className="text-sm text-washi-600">この状態の投稿に、管理者が行える操作はありません。</p>
+          ) : null}
         </div>
 
+        {allowed.has("deleted") ? (
         <div className="mt-8 rounded-lg border-2 border-red-300 bg-red-50 p-4">
           <p className="font-bold text-red-900">投稿を削除する（取り消せません）</p>
           <p className="mt-1 text-sm text-red-900">
@@ -264,6 +291,7 @@ export default function AdminListingDetail({
             削除する
           </button>
         </div>
+        ) : null}
 
         <p className="mt-4 text-sm text-washi-600">
           非公開・却下にしても、掲載料は自動返金されません。返金が必要な場合は

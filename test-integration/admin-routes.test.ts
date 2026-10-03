@@ -936,3 +936,15 @@ describe("★通報に対応する★", () => {
     expect(await db.select().from(adminActions)).toHaveLength(0);
   });
 });
+
+describe("★いまの状態でできない操作は «できません» と返す（E-4-1）★", () => {
+  it("下書きを «公開に戻す» と、汎用エラーではなく状態の説明を返す", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "draft" });
+    const result = await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "状態の説明の検査" },
+    });
+    expect(result.message).toBe("この投稿の状態では、その操作はできません。");
+  });
+});
