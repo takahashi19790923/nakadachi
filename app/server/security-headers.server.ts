@@ -133,6 +133,9 @@ export function isSharedCacheable(headers: Headers): boolean {
   const cacheControl = (headers.get("cache-control") ?? "").toLowerCase();
   if (/(^|[\s,])(private|no-store)([\s,=]|$)/.test(cacheControl)) return false;
   // public・s-maxage に加え、private の無い max-age も共有キャッシュは保存できる（RFC 9111 §3）。
+  // ★応答に max-age を書くなら、利用者ごとの中身には private を添えること。★ 添えないと
+  // ここで «共有可» と判定され、セッションの延長の Set-Cookie が黙って落ちる。
+  // Expires ヘッダだけの応答は見ていない（いま使っている応答は無い）。
   return /(^|[\s,])(public|s-maxage|max-age)([\s,=]|$)/.test(cacheControl);
 }
 

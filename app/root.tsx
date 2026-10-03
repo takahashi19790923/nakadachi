@@ -128,6 +128,9 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     } else if (error.status === 503) {
       title = "ただいまご利用いただけません";
       description = message ?? "時間をおいてもう一度お試しください。";
+    } else if (error.status === 405) {
+      title = "この操作は受け付けていません";
+      description = "このページでは送信を受け付けていません。トップページからやり直してください。";
     } else if (message) {
       description = message;
     } else if (error.statusText) {

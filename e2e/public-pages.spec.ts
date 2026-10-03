@@ -404,13 +404,19 @@ test.describe("応答の形（本番ビルド）", () => {
      * もともと公開されているので受容（監査 HDR-05）。画面の文言に出さないことを守る。
      */
     const main = /<main[\s\S]*?<\/main>/.exec(body)?.[0] ?? "";
-    expect(main).toContain("Method Not Allowed");
+    expect(main).toContain("この操作は受け付けていません");
     expect(main).not.toContain("did not provide");
   });
 
   test("★共有キャッシュに置く応答には Cookie を付けない★", async ({ request }) => {
-    // sitemap.xml も public だが DB を引くので、DB の無い環境でも返る robots.txt で見る。
-    for (const path of ["/robots.txt"]) {
+    // sitemap.xml は DB を引くので、DB のある環境だけで見る（無ければ飛ばしたことを出す）。
+    const health = await request.get("/api/health", { failOnStatusCode: false });
+    const hasDb =
+      health.ok() && ((await health.json()) as { db?: boolean }).db === true;
+    if (!hasDb) {
+      console.warn("[E2E] データベースが無いため、sitemap.xml の Cookie の検査を飛ばします。");
+    }
+    for (const path of hasDb ? ["/robots.txt", "/sitemap.xml"] : ["/robots.txt"]) {
       const response = await request.get(path, { failOnStatusCode: false });
       expect(response.headers()["cache-control"], path).toContain("public");
       const cookies = response

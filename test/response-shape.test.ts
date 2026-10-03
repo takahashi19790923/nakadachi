@@ -112,12 +112,14 @@ describe("routeErrorMessage（エラーの画面に出す文言）", () => {
     );
   });
 
-  it("★React Router 自身のエラー（data が Error）は出さない★", () => {
-    // action の無い画面への POST（405）で React Router が入れる形。
-    const internal = new Error(
-      'You made a POST request to "/legal/terms" but did not provide an `action` for route "routes/legal.terms"',
-    );
-    expect(routeErrorMessage(internal)).toBeNull();
+  it("★React Router 自身のエラーの中身は出さない★", () => {
+    // action の無い画面への POST（405）。React Router は内部の英文の Error を作り、
+    // ErrorResponseImpl が文字列にして data に入れる（いまの版で届く形）。
+    const text =
+      'Error: You made a POST request to "/legal/terms" but did not provide an `action` for route "routes/legal.terms"';
+    expect(routeErrorMessage(text)).toBeNull();
+    // 将来 Error のまま届く版が来ても出さない（保険）。
+    expect(routeErrorMessage(new Error(text))).toBeNull();
   });
 
   it("形が違うものは出さない", () => {

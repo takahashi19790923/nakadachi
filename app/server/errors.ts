@@ -222,11 +222,13 @@ export function asRouteError(
 /**
  * ルートのエラー応答の中身から、画面に出す文言だけを取り出す（形が違えば null）。
  *
- * ★Error は採らない。★ React Router 自身が作るエラー応答（action の無い画面への
- * POST の 405 など）は data に Error を入れ、その message は «You made a POST request
- * to … route "routes/…"» のような内部の英文になる。本番でも Error の置き換えは
- * data の中までは及ばないので、採ると画面にそのまま出る。asRouteError が作るのは
- * 素のオブジェクトだけ。
+ * ★asRouteError が作る形（素のオブジェクトで message が文字列）だけを採る。★
+ * React Router 自身が作るエラー応答（action の無い画面への POST の 405 など）は、
+ * 内部の英文（«You made a POST request to … route "routes/…"»）を持つ Error を
+ * 作るが、ErrorResponseImpl が構築時に文字列にして data に入れる。文字列なので
+ * 形の判定で落ちる（2026-10-03 に本番ビルドで実測）。この英文は React Router が
+ * ハイドレーション用のデータに本番でも入れるが、画面には出さない。
+ * Error の判定は、将来 data に Error がそのまま入る版が来たときの保険。
  */
 export function routeErrorMessage(value: unknown): string | null {
   if (typeof value !== "object" || value === null || value instanceof Error) return null;

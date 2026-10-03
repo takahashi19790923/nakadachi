@@ -203,15 +203,21 @@ describe("★写真の配信ではログインの期限を延ばさない★", (
    * 公開中の写真は共有キャッシュに置く応答なので、Worker は Set-Cookie を足さない。
    * ここで延長を走らせると «DB だけ延びて Cookie は古いまま» になり、次の画面でも
    * 延ばされず、Cookie の期限で先にログアウトしていた（PR-D のレビューで発覚）。
+   * 写真の配信では延長しない（延長は画面の応答に任せる）。
    */
-  it("延長の閾値を切ったセッションで公開中の写真を開いても、DB の期限は変わらない", async () => {
+  async function openPhoto(options: { published: boolean }) {
     const owner = await makeUser(db, "owner@example.test");
-    const viewer = await makeUser(db, "viewer@example.test");
-    const listingId = await makeDraft(db, owner.id, {
-      status: "published",
-      publishedAt: new Date(),
-      expiresAt: new Date(Date.now() + 30 * 86_400_000),
-    });
+    const listingId = await makeDraft(
+      db,
+      owner.id,
+      options.published
+        ? {
+            status: "published",
+            publishedAt: new Date(),
+            expiresAt: new Date(Date.now() + 30 * 86_400_000),
+          }
+        : {},
+    );
     const objectKey = `listings/${listingId}/01JQZZZZZZZZZZZZZZZZZZZZZZ`;
     await db.insert(listingImages).values({
       id: "01JQZZZZZZZZZZZZZZZZZZZZZZ",
@@ -224,10 +230,11 @@ describe("★写真の配信ではログインの期限を延ばさない★", (
       checksumSha256: "0".repeat(64),
     });
 
-    const cookies = await signIn(viewer.id);
+    // 開くのは所有者本人（下書きの写真も見られる人）。
+    const cookies = await signIn(owner.id);
     // 残りを10日にする（30日の半分を切っているので、画面なら延長される）。
     const tenDays = new Date(Date.now() + 10 * 86_400_000);
-    await db.update(sessions).set({ expiresAt: tenDays }).where(eq(sessions.userId, viewer.id));
+    await db.update(sessions).set({ expiresAt: tenDays }).where(eq(sessions.userId, owner.id));
 
     const deferred: Promise<unknown>[] = [];
     const setCookies: string[] = [];
@@ -261,21 +268,46 @@ describe("★写真の配信ではログインの期限を延ばさない★", (
       params: { objectKey },
     })) as Response;
     await response.arrayBuffer();
-    /*
-     * ★閲覧者の照会は裏で走る。★ 公開中の写真では待たれずに応答が先に返るので、
-     * すぐに見ると、延長（defer への登録と Set-Cookie）がまだ起きていないだけで緑になる。
-     * 裏の照会が済むだけの時間を置いてから、預かった処理を片付けて見る。
-     */
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await Promise.allSettled(deferred);
+    return { response, deferred, setCookies, ownerId: owner.id, tenDays };
+  }
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toContain("public");
-    expect(setCookies).toEqual([]);
+  async function expiresAtOf(userId: string): Promise<number> {
     const rows = await db
       .select({ expiresAt: sessions.expiresAt })
       .from(sessions)
-      .where(eq(sessions.userId, viewer.id));
-    expect(rows[0]!.expiresAt.getTime()).toBe(tenDays.getTime());
+      .where(eq(sessions.userId, userId));
+    return rows[0]!.expiresAt.getTime();
+  }
+
+  /*
+   * ★こちらが本命。★ 下書きの写真は閲覧者を待ってから所有者かどうかを決めるので、
+   * 応答が返った時点で照会（と、延長するならその登録）が済んでいる。待ち時間に頼らず、
+   * 200 が返ること自体が «セッションを読んで所有者と判定した» 証拠になる。
+   */
+  it("下書きの写真を所有者が開くと 200 で、延長は起きない", async () => {
+    const { response, deferred, setCookies, ownerId, tenDays } = await openPhoto({
+      published: false,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(setCookies).toEqual([]);
+    expect(deferred).toEqual([]);
+    expect(await expiresAtOf(ownerId)).toBe(tenDays.getTime());
+  });
+
+  it("公開中の写真は public で返り、延長は起きない", async () => {
+    const { response, deferred, setCookies, ownerId, tenDays } = await openPhoto({
+      published: true,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("public");
+    /*
+     * 公開中の写真では閲覧者の照会を待たずに応答が返る。延長が起きるなら裏で起きるので、
+     * 済むだけの時間を置いてから見る（上の下書きの検査が本命。こちらは補助）。
+     */
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await Promise.allSettled(deferred);
+    expect(setCookies).toEqual([]);
+    expect(await expiresAtOf(ownerId)).toBe(tenDays.getTime());
   });
 });
