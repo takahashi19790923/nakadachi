@@ -1,3 +1,5 @@
+import { data } from "react-router";
+
 /**
  * エラーの型。
  *
@@ -173,4 +175,63 @@ export function toPublicError(error: unknown): {
     message:
       "処理中に問題が発生しました。時間をおいてもう一度お試しください。",
   };
+}
+
+/** asRouteError で包んだときに ErrorBoundary が受け取る中身 */
+export interface RouteErrorData {
+  readonly message: string;
+}
+
+/**
+ * loader・action の外へ出す前に、AppError を «伏せられない形» に変える。（監査 AUTH-08）
+ *
+ * ★本番の React Router は、Response 以外の例外を一律 «Unexpected Server Error»・
+ * 500 に置き換える。★（node_modules/react-router の server-runtime/errors.js の
+ * sanitizeError。開発中は置き換えないので、手元では正しく見える。）
+ * 回数制限の 429 も CSRF の 403 も本番では 500 になり、画面は «問題が発生しました»、
+ * 監視は «サーバー障害» と読む。entry.server.tsx の補正も、伏せた後の値しか見えない。
+ *
+ * data() で投げたものは «ルートのエラー応答» として扱われ、状態と中身がそのまま
+ * ErrorBoundary に届く。中身は利用者向けの文言だけ（detail は載せない）。
+ * それ以外の例外はそのまま返す（本物の障害は 500 のままでよい）。
+ *
+ * 使い方: try/catch で受けずに外へ出していた loader・action を
+ * `try { … } catch (error) { throw asRouteError(error); }` で包む。
+ */
+export function asRouteError(
+  error: unknown,
+  /**
+   * 渡せば、包む AppError の code と detail を warn で残す。
+   * ★ルートのエラー応答は React Router の handleError を通らない。★ 包むだけだと、
+   * CSRF の照合失敗（攻撃の兆候になりうる）が一切記録されなくなる。
+   */
+  logger?: { warn(message: string, fields?: Record<string, string | number>): void },
+): unknown {
+  if (error instanceof Response) return error;
+  if (isAppError(error)) {
+    logger?.warn("request rejected", {
+      code: error.code,
+      ...(error.detail ? { detail: sanitizeForLog(error.detail) } : {}),
+    });
+    const body: RouteErrorData = { message: error.message };
+    return data(body, { status: error.status });
+  }
+  return error;
+}
+
+/**
+ * ルートのエラー応答の中身から、画面に出す文言だけを取り出す（形が違えば null）。
+ *
+ * ★asRouteError が作る形（素のオブジェクトで message が文字列）だけを採る。★
+ * React Router 自身が作るエラー応答（action の無い画面への POST の 405 など）は、
+ * 内部の英文（«You made a POST request to … route "routes/…"»）を持つ Error を
+ * 作るが、ErrorResponseImpl が構築時に文字列にして data に入れる。文字列なので
+ * 形の判定で落ちる（2026-10-03 に本番ビルドで実測）。この英文は React Router が
+ * ハイドレーション用のデータに本番でも入れるが、画面には出さない。
+ * Error の判定は、将来 data に Error がそのまま入る版が来たときの保険。
+ */
+export function routeErrorMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || value instanceof Error) return null;
+  const message = (value as Partial<RouteErrorData>).message;
+  return typeof message === "string" && message.length > 0 ? message : null;
 }

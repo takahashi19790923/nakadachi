@@ -18,7 +18,7 @@ import { SiteHeader } from "./components/site-header";
 import { SITE } from "./config/site";
 import { loadUser } from "./server/guards.server";
 import { getApp } from "~/server/app-context";
-import { isAppError } from "~/server/errors";
+import { isAppError, routeErrorMessage } from "~/server/errors";
 /**
  * 全画面で必要な値をここで1回だけ用意する。
  *
@@ -112,17 +112,27 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
 
   if (isRouteErrorResponse(error)) {
     status = error.status;
+    // asRouteError で包んだ AppError の、利用者向けの文言（detail は載っていない）。
+    const message = routeErrorMessage(error.data);
     if (error.status === 404) {
       title = "ページが見つかりません";
       description =
         "アドレスが変わったか、掲載が終了した可能性があります。トップから探し直してください。";
     } else if (error.status === 403) {
       title = "この操作は行えません";
-      description = "権限をご確認のうえ、もう一度お試しください。";
+      description = message ?? "権限をご確認のうえ、もう一度お試しください。";
     } else if (error.status === 429) {
       title = "しばらくお待ちください";
       description =
-        "短い時間に操作が続きました。少し時間をおいてからお試しください。";
+        message ?? "短い時間に操作が続きました。少し時間をおいてからお試しください。";
+    } else if (error.status === 503) {
+      title = "ただいまご利用いただけません";
+      description = message ?? "時間をおいてもう一度お試しください。";
+    } else if (error.status === 405) {
+      title = "この操作は受け付けていません";
+      description = "このページでは送信を受け付けていません。トップページからやり直してください。";
+    } else if (message) {
+      description = message;
     } else if (error.statusText) {
       description = error.statusText;
     }
@@ -138,6 +148,12 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-16">
+      {/*
+        ★エラーの画面にも題名を付ける。★（監査 HDR-03）ルートの meta は
+        エラーのときに出ないので、以前は 404 などに <title> が無かった。
+        React 19 は <title> を head へ移す。
+      */}
+      <title>{`${title} | ${SITE.name}`}</title>
       <p className="text-sm font-semibold text-washi-500">エラー {status}</p>
       <h1 className="mt-2 text-2xl font-bold text-washi-900">{title}</h1>
       <p className="mt-4 text-washi-700">{description}</p>

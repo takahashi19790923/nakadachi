@@ -3,7 +3,7 @@ import { redirect } from "react-router";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
-import { notFound } from "~/server/errors";
+import { asRouteError, notFound } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
 import { setBlock } from "~/server/services/engagement-service.server";
 import { safeRedirectPath } from "~/domain/validation/common";
@@ -20,19 +20,24 @@ export async function action({ request, context: rawContext, params }: Route.Act
   if (!isUlid(params.userId)) throw notFound("malformed id");
 
   const formData = await request.formData();
-  assertSameOrigin(request, context.env);
-  await verifyCsrfToken(
-    context.env,
-    formData.get("_csrf"),
-    readCookie(request, csrfCookieName(context.env)),
-  );
+  try {
+    assertSameOrigin(request, context.env);
+    await verifyCsrfToken(
+      context.env,
+      formData.get("_csrf"),
+      readCookie(request, csrfCookieName(context.env)),
+    );
 
-  await setBlock({
-    db: context.getDb(),
-    blockerId: user.id,
-    blockedId: params.userId,
-    intent: formData.get("intent") === "unblock" ? "unblock" : "block",
-  });
+    await setBlock({
+      db: context.getDb(),
+      blockerId: user.id,
+      blockedId: params.userId,
+      intent: formData.get("intent") === "unblock" ? "unblock" : "block",
+    });
+  } catch (error) {
+    // CSRF の照合に落ちた・自分自身を指定した、を 500 にしない（asRouteError の説明）。
+    throw asRouteError(error, context.logger);
+  }
 
   return redirect(safeRedirectPath(formData.get("next"), "/mypage/messages"));
 }
