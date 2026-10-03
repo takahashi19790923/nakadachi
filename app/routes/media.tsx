@@ -47,8 +47,12 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   headers.set(
     "cache-control",
     access.cacheable
-      ? // 公開中の投稿の画像。内容は変わらない（差し替えは新しいキーになる）。
-        "public, max-age=86400, stale-while-revalidate=604800"
+      ? /*
+         * 公開中の投稿の画像。内容は変わらない（差し替えは新しいキーになる）。
+         * ★期限は掲載の終了まで（最長1日）。古い写しを使い続ける指定は付けない。★
+         * （監査 PRIV-06。以前は1日＋7日で、掲載が終わった・止まった後も見え続けた）
+         */
+        `public, max-age=${access.maxAgeSeconds ?? 0}`
       : // 下書きの画像。共有キャッシュに残さない。
         "private, no-store",
   );

@@ -64,6 +64,16 @@ export async function action({ request, context: rawContext, params }: Route.Act
       return { fields: toFieldErrors(parsed.error), message: null, done: false };
     }
 
+    /*
+     * ★通報できるのは、いま公開されている投稿だけ。★（監査 FN-08）
+     * 以前は投稿の有無も公開かどうかも見ずに書いていたので、他人の下書きや
+     * 停止中の投稿 ID にも通報が作れ、無い ID では汎用エラーになった
+     * （ID が実在するかを探る手がかりになる）。
+     */
+    if (!isUlid(params.listingId) || !(await getPublishedListing(db, params.listingId))) {
+      throw notFound(`report target not public: ${params.listingId}`);
+    }
+
     await createReport(db, {
       reporterId: user.id,
       target: { type: "listing", id: params.listingId },

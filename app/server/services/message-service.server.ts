@@ -50,6 +50,11 @@ export async function ensureThread(options: {
 }): Promise<{ threadId: string }> {
   const { db, listingId, inquirerId } = options;
 
+  // ★メッセージを止めているときは、会話も作らせない。★（監査 FN-09）
+  // 以前は送信だけ止めていて、空の会話が作れた。
+  const flags = await getSiteFlags(db);
+  if (flags.messagesPaused) throw pausedError("message", flags.notice);
+
   const listingRows = await db
     .select({ ownerId: listings.ownerId, status: listings.status })
     .from(listings)

@@ -11,6 +11,8 @@ import { requireAdminGate } from "~/server/guards.server";
 import {
   addBannedWord,
   listBannedWords,
+  normalizeBannedWord,
+  normalizeForMatching,
   removeBannedWord,
 } from "~/server/repositories/moderation-repository.server";
 import { formString } from "~/domain/validation/common";
@@ -56,40 +58,59 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
 
     if (intent === "remove") {
       const id = formString(formData, "id");
-      await removeBannedWord(db, id);
-      await writeAdminAction(db, {
-        adminId: admin.id,
-        actionType: "banned_word_remove",
-        targetType: "banned_word",
-        targetId: id,
-        reason: "管理画面からの削除",
+      // 本処理と記録は1つのトランザクションにする（監査 ADM-03）。
+      // ★消したときだけ記録する。★ 無い id で «削除した» を残さない。
+      const removed = await db.transaction(async (tx) => {
+        if (!(await removeBannedWord(tx, id))) return false;
+        await writeAdminAction(tx, {
+          adminId: admin.id,
+          actionType: "banned_word_remove",
+          targetType: "banned_word",
+          targetId: id,
+          reason: "管理画面からの削除",
+        });
+        return true;
       });
-      return { message: null };
+      return { message: removed ? null : "対象の語句が見つかりませんでした。" };
     }
 
     const word = formString(formData, "word").trim();
-    if (word.length < 2) {
-      return { message: "2文字以上の語句を入力してください。" };
+    /*
+     * ★長さは照合用に寄せた後で見る。★（監査 ADM-14）
+     * 保存されるのは記号・空白を落とした形なので、«・・» «--» のような入力は空の語に
+     * なり、空の語は «どの投稿にも含まれる» として全部を止めてしまう。
+     */
+    if ([...normalizeBannedWord(word)].length < 2) {
+      return { message: "記号・空白を除いて2文字以上の語句を入力してください。" };
+    }
+    // 照合は文の区切り（。、.,!?;）をまたがないので、区切り入りの語は永久に当たらない。
+    if (normalizeForMatching(word).includes(String.fromCharCode(10))) {
+      return { message: "文の区切り（。、.,!?;）を含む語句は照合できません。区切りを除いて登録してください。" };
     }
 
     const severity = formData.get("severity") === "block" ? "block" : "flag";
-    await addBannedWord(db, {
-      word,
-      severity,
-      note: formString(formData, "note").trim() || undefined,
-      createdBy: admin.id,
+    const added = await db.transaction(async (tx) => {
+      // ★足したときだけ記録する。★ 既にある語で «追加した» を残さない。
+      const inserted = await addBannedWord(tx, {
+        word,
+        severity,
+        note: formString(formData, "note").trim() || undefined,
+        createdBy: admin.id,
+      });
+      if (!inserted) return false;
+
+      await writeAdminAction(tx, {
+        adminId: admin.id,
+        actionType: "banned_word_add",
+        targetType: "banned_word",
+        // ★語そのものを監査ログの対象IDに入れない。★ 差別的な語を扱うため。
+        targetId: `${severity}:${word.length}chars`,
+        reason: "管理画面からの追加",
+      });
+      return true;
     });
 
-    await writeAdminAction(db, {
-      adminId: admin.id,
-      actionType: "banned_word_add",
-      targetType: "banned_word",
-      // ★語そのものを監査ログの対象IDに入れない。★ 差別的な語を扱うため。
-      targetId: `${severity}:${word.length}chars`,
-      reason: "管理画面からの追加",
-    });
-
-    return { message: null };
+    return { message: added ? null : "その語句はすでに登録されています。" };
   } catch (error) {
     if (error instanceof Response) throw error;
     context.logger.error("banned word action failed", error);

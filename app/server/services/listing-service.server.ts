@@ -4,6 +4,7 @@ import {
   categories,
   listingCategoryDetails,
   listings,
+  payments,
 } from "~/db/schema/index.ts";
 import {
   CATEGORIES,
@@ -27,6 +28,7 @@ import { getSiteFlags, pausedError } from "./site-flags.server.ts";
 import {
   createSystemReport,
   findBlockingWord,
+  findBlockingWordAcrossBreaks,
   findFlaggedWords,
 } from "../repositories/moderation-repository.server.ts";
 
@@ -95,6 +97,27 @@ function toDetailValues(input: ListingInput) {
 }
 
 /**
+ * 禁止語の照合にかける文字列。★投稿の文字の欄をすべて★ 改行でつなぐ。（監査 SEC-06）
+ *
+ * 以前は題名と本文だけだったので、公開ページに出る詳細の欄（応募資格・会社名・
+ * 提供内容・貸出条件・地域メモ等）に禁止語を書けば素通りした。欄を個別に並べると
+ * 新しい欄を足したときに漏れるので、文字の値を全部拾う（選択肢の値も入るが、
+ * 禁止語と一致することは無い）。
+ */
+export function collectPublicText(values: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const value of Object.values(values)) {
+    if (typeof value === "string") parts.push(value);
+    else if (value && typeof value === "object" && !(value instanceof Date)) {
+      for (const inner of Object.values(value as Record<string, unknown>)) {
+        if (typeof inner === "string") parts.push(inner);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
  * 入力の共通検証。
  * 地域の組み合わせと禁止ワードは DB を引く必要があるので、Zod ではなくここで見る。
  */
@@ -110,7 +133,7 @@ async function validateAgainstDatabase(
     });
   }
 
-  const blocked = await findBlockingWord(db, `${input.title}\n${input.body}`);
+  const blocked = await findBlockingWord(db, collectPublicText(input));
   if (blocked) {
     throw new AppError(
       "validation_failed",
@@ -303,6 +326,29 @@ export async function transitionListing(
 
   assertTransition(from, options.to, options.actor);
 
+  /*
+   * ★管理者は、一度も公開されたことの無い投稿を支払いなしで公開できない。★（監査 AUTHZ-01）
+   *
+   * 遷移表は «却下 → 公開（戻す）» を管理者に許している。戻す先が «公開されたことの
+   * ある投稿» なら復帰だが、決済待ちから却下した投稿（published_at が無い）を戻すと
+   * ★110円を払っていない投稿が新しく公開されていた。★ 公開は支払い成立の経路だけ、
+   * という原則に合わせ、成立した決済が無ければ止める。
+   */
+  if (options.to === "published" && options.actor === "admin" && !current.publishedAt) {
+    const paid = await executor
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.listingId, options.listingId), eq(payments.status, "succeeded")))
+      .limit(1);
+    if (paid.length === 0) {
+      throw new AppError(
+        "conflict",
+        "掲載料のお支払いが確認できない投稿は、管理画面から公開できません。",
+        { detail: `admin publish without payment: ${options.listingId}` },
+      );
+    }
+  }
+
   const now = new Date();
   const values: Record<string, unknown> = {
     status: options.to,
@@ -461,15 +507,29 @@ export async function flagPublishedListing(options: {
   const { db, logger, listingId } = options;
   try {
     const rows = await db
-      .select({ title: listings.title, body: listings.body })
+      .select({ title: listings.title, body: listings.body, areaNote: listings.areaNote })
       .from(listings)
       .where(eq(listings.id, listingId))
       .limit(1);
     const row = rows[0];
     if (!row) return;
+    // 詳細の欄も同じく照合する（監査 SEC-06）。
+    const details = await db
+      .select()
+      .from(listingCategoryDetails)
+      .where(eq(listingCategoryDetails.listingId, listingId))
+      .limit(1);
 
-    const flagged = await findFlaggedWords(db, `${row.title}\n${row.body}`);
-    if (flagged.length === 0) return;
+    // 詳細の行の ID・日時は照合に入れない（内部の値。禁止語と当たることは無いが混ぜない）。
+    const detailText = details[0]
+      ? collectPublicText({ ...details[0], listingId: undefined, createdAt: undefined, updatedAt: undefined })
+      : "";
+    const text = [collectPublicText(row), detailText].join("\n");
+    const flagged = await findFlaggedWords(db, text);
+    // 文の区切りを挟んで block の語をすり抜けたもの（«闇。バイト»）も確認待ちに入れる。
+    const acrossBreaks = await findBlockingWordAcrossBreaks(db, text);
+    const count = flagged.length + (acrossBreaks ? 1 : 0);
+    if (count === 0) return;
 
     /*
      * 語そのものは detail に書かない。通報一覧は本文を持たない画面なので、
@@ -479,7 +539,7 @@ export async function flagPublishedListing(options: {
     const { created } = await createSystemReport(db, {
       target: { type: "listing", id: listingId },
       reason: "other",
-      detail: `自動検知：要確認の語を ${flagged.length} 件含みます`,
+      detail: `自動検知：要確認の語を ${count} 件含みます`,
     });
     logger.info("listing flagged for review", { listingId, created });
   } catch (error) {

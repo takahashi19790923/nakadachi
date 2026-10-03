@@ -1,4 +1,5 @@
 import { requireSecret } from "~/server/env.server";
+import { readBodyWithLimit } from "~/server/http-body.server";
 import {
   handleStripeEvent,
 } from "~/server/services/payment/payment-service.server";
@@ -53,11 +54,13 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
   }
 
   // ★本文はテキストとして読む。★ 署名は生のバイト列に対して計算されている。
-  // content-length は自己申告なので、読み切ってからも実測で確かめる。
-  const payload = await request.text();
-  if (payload.length > MAX_WEBHOOK_BYTES) {
+  // ★読みながら上限で打ち切る。★（監査 DOS-01）content-length は自己申告で、
+  // 付いていない（chunked）本文は上の足切りを素通りする。以前は request.text() で
+  // 全部読んでから長さを見ていたので、上限の無い本文を最後まで読み込んでいた。
+  const payload = await readBodyWithLimit(request, MAX_WEBHOOK_BYTES);
+  if (payload === null) {
     context.logger.warn("stripe webhook rejected: body too large (actual)", {
-      length: payload.length,
+      limit: MAX_WEBHOOK_BYTES,
     });
     return new Response("payload too large", { status: 413 });
   }
