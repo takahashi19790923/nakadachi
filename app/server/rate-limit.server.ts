@@ -71,6 +71,14 @@ export const RATE_LIMITS = {
   imageUpload: { windowSeconds: 3600, max: 60 },
   /** 問い合わせフォーム */
   contactSend: { windowSeconds: 3600, max: 5 },
+  /**
+   * 退会の申込（利用者単位・1日）。取り消しは数えない。
+   *
+   * ★申込と取り消しの1往復ごとにメールが1通出る。★ 制限が無いと、繰り返すだけで
+   * サービス全体の1日の送信枠（emailGlobalDaily）を使い切り、全員のログインの
+   * メールが止まった（監査 SEC-12）。正規の利用で1日に3回を超えることはない。
+   */
+  accountDeletionToggle: { windowSeconds: 86_400, max: 3 },
   /** 管理画面の第3層 */
   adminGate: { windowSeconds: 900, max: 10 },
   /**

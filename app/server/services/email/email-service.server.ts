@@ -85,6 +85,18 @@ export interface SendEmailResult {
   readonly skipped: "duplicate" | "not_configured" | "over_budget" | null;
 }
 
+/**
+ * 件名を1行にする。（監査 SEC-05）
+ *
+ * ★件名はメールのヘッダになる。★ 改行が混ざると、送信事業者の扱い次第で
+ * ヘッダの差し込みや件名の切れ方のずれが起きうる（Resend 側の扱いは確かめていない）。
+ * 利用者の入力が件名に入る経路（問い合わせの転送）があるので、全種類が通る
+ * この出口で、制御文字と行・段落の区切りを空白1つに潰す。
+ */
+export function singleLineSubject(subject: string): string {
+  return subject.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
+}
+
 export async function sendEmail(
   options: SendEmailOptions,
   deps: { db: Db; env: AppEnv; logger: Logger },
@@ -178,7 +190,7 @@ export async function sendEmail(
     logger.warn("email not sent: RESEND_API_KEY is not configured", {
       template: options.template,
       recipient: maskEmail(options.to),
-      subject: options.content.subject,
+      subject: singleLineSubject(options.content.subject),
     });
     await db
       .update(emailDeliveryLogs)
@@ -200,7 +212,7 @@ export async function sendEmail(
         from: env.MAIL_FROM,
         to: [options.to],
         reply_to: options.replyTo ?? env.EMAIL_REPLY_TO,
-        subject: options.content.subject,
+        subject: singleLineSubject(options.content.subject),
         html: options.content.html,
         text: options.content.text,
       }),

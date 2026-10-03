@@ -91,7 +91,29 @@ export function safeRedirectPath(
     return fallback;
   }
   if (resolved.origin !== base) return fallback;
-  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  const result = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+
+  /*
+   * ★解釈した後の形でも、もう一度確かめる。★（監査 SEC-09）
+   * «/.//evil.example» «/a/..//evil.example» は、解釈の途中で «.» «..» が消えて
+   * パスが «//evil.example» になる。同じオリジンに留まったように見えるが、それを
+   * Location に入れるとブラウザはスキーム相対の URL として外部へ飛ぶ。
+   * 出す文字列そのものが «/ で始まり // で始まらない・\ を含まない» こと、
+   * もう一度解釈しても同じ形になることを確かめる。
+   */
+  if (!result.startsWith("/") || result.startsWith("//") || result.includes("\\")) {
+    return fallback;
+  }
+  let again: URL;
+  try {
+    again = new URL(result, base);
+  } catch {
+    return fallback;
+  }
+  if (again.origin !== base || `${again.pathname}${again.search}${again.hash}` !== result) {
+    return fallback;
+  }
+  return result;
 }
 
 /**

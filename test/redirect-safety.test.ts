@@ -46,6 +46,13 @@ describe("safeRedirectPath", () => {
       "/\t\\evil.example",
       "javascript:alert(1)",
       "data:text/html,<script>alert(1)</script>",
+      // ★解釈の途中で «.» «..» が消えて «//» になる形★（監査 SEC-09）
+      "/.//evil.example",
+      "/././/evil.example",
+      "/a/..//evil.example",
+      "/%2e//evil.example",
+      "/%2E%2E//evil.example",
+      "/a/%2e%2e//evil.example",
     ];
     for (const attempt of attempts) {
       const result = safeRedirectPath(attempt);
