@@ -41,7 +41,10 @@ export interface PaymentAnomaly {
   readonly kind:
     | "paid_not_published"
     | "refunded_but_live"
-    | "webhook_never_arrived";
+    | "webhook_never_arrived"
+    | "duplicate_paid"
+    | "paid_webhook_failed"
+    | "published_without_payment";
   readonly paymentId: string;
   /** 投稿が消えている決済もありうる（退会で参照が外れる）。それでも警報は出す */
   readonly listingId: string | null;
@@ -101,6 +104,11 @@ export async function findPaymentAnomalies(db: Db): Promise<PaymentAnomaly[]> {
     join listings l on l.id = p.listing_id
     where p.status = 'refunded'
       and l.status = 'published'
+      -- 二重払いの片方を返金しただけなら、ほかの成立した支払いで掲載料は払われている
+      and not exists (
+        select 1 from payments p2
+        where p2.listing_id = l.id and p2.status = 'succeeded'
+      )
 
     union all
 
@@ -115,6 +123,61 @@ export async function findPaymentAnomalies(db: Db): Promise<PaymentAnomaly[]> {
     left join listings l on l.id = p.listing_id
     where p.status = 'created'
       and p.created_at <= now() - make_interval(mins => ${staleMinutes})
+
+    union all
+
+    /*
+     * ★同じ投稿に支払いが2回成立した（二重払い）。★（監査 PAY-02）
+     * 画面の連打や、支払い中に «支払う» をもう一度押した場合に起こりうる。
+     * どの検査にも掛からず、利用者の明細に2回残る。新しい方を返金する。
+     */
+    select 'duplicate_paid' as kind,
+           p.id as payment_id, l.id as listing_id, l.title, l.status
+    from payments p
+    join listings l on l.id = p.listing_id
+    where p.status = 'succeeded'
+      and exists (
+        select 1 from payments p2
+        where p2.listing_id = p.listing_id
+          and p2.status = 'succeeded'
+          and p2.id < p.id
+      )
+
+    union all
+
+    /*
+     * ★お金を受け取った通知の処理に失敗し、決済が成立のまま残っていない。★（監査 PAY-01 の網）
+     * 支払い成立の通知（completed / async_payment_succeeded）が failed で、
+     * その決済の記録がまだ成立していない。failed の件数の警報だけでは、
+     * «どの決済が払われたのに出ていないか» が分からなかった。
+     */
+    select 'paid_webhook_failed' as kind,
+           p.id as payment_id, l.id as listing_id, l.title, l.status
+    from payments p
+    left join listings l on l.id = p.listing_id
+    where p.status in ('created', 'pending', 'expired')
+      and exists (
+        select 1 from payment_webhook_events e
+        where e.payment_id = p.id
+          and e.status = 'failed'
+          and e.event_type in ('checkout.session.completed', 'checkout.session.async_payment_succeeded')
+      )
+
+    union all
+
+    /*
+     * ★支払いの成立した記録が一度も無いのに、公開されたことがある投稿。★（監査 AUTHZ-01 の網）
+     * 公開は支払い成立の経路だけのはず。返金・係争になった決済も «一度は成立した» に数える。
+     */
+    select 'published_without_payment' as kind,
+           l.id as payment_id, l.id as listing_id, l.title, l.status
+    from listings l
+    where l.published_at is not null
+      and not exists (
+        select 1 from payments p
+        where p.listing_id = l.id
+          and p.status in ('succeeded', 'refunded', 'partially_refunded', 'disputed')
+      )
   `);
 
   return rows.rows.map((row) => ({
@@ -183,6 +246,10 @@ export async function reconcilePayments(options: {
       webhookNeverArrived: anomalies.filter(
         (a) => a.kind === "webhook_never_arrived",
       ).length,
+      duplicatePaid: anomalies.filter((a) => a.kind === "duplicate_paid").length,
+      paidWebhookFailed: anomalies.filter((a) => a.kind === "paid_webhook_failed").length,
+      publishedWithoutPayment: anomalies.filter((a) => a.kind === "published_without_payment")
+        .length,
       failedWebhooks,
     },
   );

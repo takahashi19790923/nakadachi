@@ -11,10 +11,11 @@ import { privatePageMeta } from "~/domain/seo";
 import { isUlid } from "~/domain/ulid";
 import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
-import { notFound, toPublicError } from "~/server/errors";
+import { AppError, notFound, toPublicError } from "~/server/errors";
 import { assertOwner, requireUser } from "~/server/guards.server";
 import { getListingOwnership } from "~/server/repositories/listing-repository.server";
 import { transitionListing } from "~/server/services/listing-service.server";
+import { cancelOpenCheckouts } from "~/server/services/payment/payment-service.server";
 import { formString } from "~/domain/validation/common";
 import type { Route } from "./+types/listings.close";
 import { getApp } from "~/server/app-context";
@@ -60,6 +61,31 @@ export async function action({ request, context: rawContext, params }: Route.Act
     assertOwner(ownership.ownerId, user);
 
     const intent = formString(formData, "intent", "close");
+
+    /*
+     * ★決済待ちの投稿を消すときは、生きた支払いリンクを先に無効にする。★（監査 FN-07）
+     * 以前は状態だけ変えていたので、消した投稿の支払いリンクが期限まで払えた。
+     * 払い終わった直後（確認中）なら消させない。消すと «払ったのに投稿が無い» になる。
+     */
+    if (
+      intent === "delete" &&
+      (ownership.status === "payment_pending" || ownership.status === "payment_processing")
+    ) {
+      const { paidInProgress } = await cancelOpenCheckouts({
+        db,
+        env: context.env,
+        logger: context.logger,
+        listingId: params.listingId,
+      });
+      if (paidInProgress) {
+        throw new AppError(
+          "conflict",
+          "お支払いの確認中のため、いまは削除できません。数分たってからもう一度お試しください。しばらくたっても変わらない場合は、お問い合わせください。",
+          { detail: `delete blocked: checkout complete or unknown for ${params.listingId}` },
+        );
+      }
+    }
+
     // 遷移の可否は assertTransition が判断する。ここで status を直接書かない。
     await transitionListing(db, {
       listingId: params.listingId,
