@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 
 import { categories, listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
 import { isCategorySlug } from "~/domain/categories";
@@ -28,6 +28,7 @@ import {
   createCheckoutSession,
   createRefund,
   expireCheckoutSession,
+  retrieveCheckoutSession,
   type StripeEvent,
 } from "./stripe-client.server.ts";
 
@@ -50,6 +51,13 @@ import {
  * ここを伸ばしたら検知の猶予も一緒に伸びる（別々に持たない）。
  */
 export const SESSION_TTL_MINUTES = 60;
+
+/**
+ * 前回の支払いが払い終わっているときの案内。
+ * 成立の通知の処理が失敗して止まった場合は待っても解けないので、問い合わせ先も書く。
+ */
+const CHECKOUT_IN_PROGRESS_MESSAGE =
+  "お支払いの確認中です。反映まで数分お待ちください。お支払いがお済みの場合、もう一度お支払いいただく必要はありません。しばらくたっても反映されない場合は、お問い合わせください。";
 
 export interface CheckoutStartResult {
   readonly redirectUrl: string;
@@ -141,6 +149,52 @@ export async function startListingCheckout(options: {
       ),
     );
 
+  /*
+   * ★前回の決済が «払い終わった» かを、新しい Session を作る前に Stripe に聞く。★（監査 PAY-01）
+   *
+   * 支払いの確認中の画面で待ちきれずにもう一度 «支払う» を押すと、前回の
+   * Session はすでに完了（complete）していることがある。以前はそれを知らずに
+   * 新しい Session を作り、前回を /expire しようとして 400 になり（完了した
+   * Session は失効できない）、★それでも DB を expired にしていた。★ 後から届いた
+   * 成立の通知は expired の行を成立にできず、110円を受け取ったのに掲載が出なかった。
+   *
+   * Stripe の Session の状態（API リファレンス、2026-10-03 確認）:
+   *   open     … 進行中。支払いの処理はまだ始まっていない
+   *   complete … 完了。支払いの処理は続いていることがある
+   *   expired  … 期限切れ。これ以上何も起きない
+   * /expire できるのは open だけ。
+   *
+   * ★聞けなかったら新しい Session を作らない（fail-closed）。★ 作ると、払い終わった
+   * 決済の横に2本目の支払いリンクができる。止まるのは Stripe 側の障害中だけ。
+   */
+  const stillOpen: typeof openPayments = [];
+  for (const open of openPayments) {
+    const state = await readCheckoutStatus({
+      secretKey: stripeSecretKey,
+      sessionId: open.checkoutSessionId,
+      logger,
+      listingId,
+    });
+    if (state === "complete") {
+      throw new AppError("conflict", CHECKOUT_IN_PROGRESS_MESSAGE, {
+        detail: `previous checkout session is complete: payment=${open.id}`,
+      });
+    }
+    /*
+     * Stripe で切れている Session は、記録をここで閉じない（2026-10 のレビュー）。
+     * 切れた時点で Stripe は失効の通知を送っており、その処理が記録を直す。
+     * ここで先に閉じると、その通知が «こちらが閉じた決済» と見分けられて投稿に
+     * 触れなくなり、新しい Session を作れなかったときに投稿が決済待ちのまま残る。
+     * Stripe に無い（missing）ものは通知も来ないので、ここで閉じる。
+     */
+    if (state === "missing") {
+      await markPaymentExpired(db, open.id);
+      continue;
+    }
+    if (state === "expired") continue;
+    stillOpen.push(open);
+  }
+
   const paymentId = ulid();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
 
@@ -150,7 +204,8 @@ export async function startListingCheckout(options: {
     amountJpy: LISTING_FEE_JPY,
     currency: LISTING_FEE_CURRENCY,
     productName: "投稿の掲載料",
-    productDescription: "1件の掲載につき110円（税込）。これ以外の料金はかかりません。",
+    // 金額の文字も定数から組む（監査 FN-01。直書きは料金を変えたとき取り残される）。
+    productDescription: `1件の掲載につき${LISTING_FEE_JPY.toLocaleString("ja-JP")}円（税込）。これ以外の料金はかかりません。`,
     successUrl: new URL(
       `/listings/${listingId}/pending`,
       env.APP_ORIGIN,
@@ -170,7 +225,9 @@ export async function startListingCheckout(options: {
       duration_days: String(listing.durationDays),
     },
     expiresAt,
-    // 画面の連打で Session が二重にできるのを Stripe 側でも止める。
+    // 同じ要求の再送（通信のやり直し）で Session が二重にできるのを止める。
+    // ★画面の連打は止めない。★ 押すたびに paymentId が新しいので鍵も変わる。
+    // 連打で2本とも払われた場合は、突き合わせの duplicate_paid が拾う（監査 PAY-02）。
     idempotencyKey: `checkout:${paymentId}`,
   });
 
@@ -205,28 +262,59 @@ export async function startListingCheckout(options: {
    * 払っている本人に「お支払いを確認できませんでした」が届く。
    * 新しい記録を先に入れておけば、あちらは追い越された通知だと分かる。
    *
-   * 無効化に失敗しても決済の開始は止めない。ここで止めると
-   * 「一度やめると二度と払えない投稿」ができる。
+   * ★失効できなかったら、記録を expired にしない。★（監査 PAY-01）
+   * 失効できないのは «上で open と聞いてから今までの間に払い終わった»
+   * か «もう切れた» のどちらか。もう一度聞いて記録を合わせる。
+   *  - expired … 記録も expired にする
+   *  - complete … 払い終わっている。★新しい Session を使わせない。★ 新しい方を
+   *    失効させ、利用者には «確認中» と返す（2本目を払わせない）。記録は
+   *    そのまま残し、成立の通知で公開する
+   *  - 聞けない … 記録はそのまま。成立の通知が来れば公開され、来なければ
+   *    Stripe の期限で expired の通知が来る
    */
-  for (const open of openPayments) {
+  for (const open of stillOpen) {
     try {
       await expireCheckoutSession({
         secretKey: stripeSecretKey,
         sessionId: open.checkoutSessionId,
       });
+      await markPaymentExpired(db, open.id);
+      continue;
     } catch (error) {
-      // 支払い済み・期限切れなら Stripe が 400 を返す。無効にする対象が
-      // 無いだけなので進める。
       logger.warn("failed to expire previous checkout session", {
         listingId,
         paymentId: open.id,
         detail: error instanceof Error ? error.message.slice(0, 200) : "unknown",
       });
     }
-    await db
-      .update(payments)
-      .set({ status: "expired" })
-      .where(eq(payments.id, open.id));
+
+    const state = await readCheckoutStatus({
+      secretKey: stripeSecretKey,
+      sessionId: open.checkoutSessionId,
+      logger,
+      listingId,
+    }).catch(() => null);
+    if (state === "expired" || state === "missing") {
+      await markPaymentExpired(db, open.id);
+      continue;
+    }
+    if (state === "complete") {
+      // 前回が払い終わっていた。いま作った方を使わせない。
+      // ★記録を先に閉じてから Stripe で失効させる。★ 失効の通知（実測220ms）が
+      // 先に着くと «こちらが閉じた決済» と見分けられず、払った本人に失敗の通知が出る。
+      await markPaymentExpired(db, paymentId);
+      try {
+        await expireCheckoutSession({ secretKey: stripeSecretKey, sessionId: session.id });
+      } catch (expireError) {
+        logger.error("failed to expire the new checkout session after a race", expireError, {
+          listingId,
+          paymentId,
+        });
+      }
+      throw new AppError("conflict", CHECKOUT_IN_PROGRESS_MESSAGE, {
+        detail: `previous checkout session completed during restart: payment=${open.id}`,
+      });
+    }
   }
 
   /*
@@ -260,6 +348,142 @@ export async function startListingCheckout(options: {
 
   logger.info("checkout session created", { listingId, paymentId });
   return { redirectUrl: session.url, paymentId };
+}
+
+/**
+ * Checkout Session の状態（open / complete / expired）を Stripe に聞く。
+ *
+ * ★聞けなければ例外にする（fail-closed）。★ 呼び出し側が «払い終わったか
+ * 分からないまま新しい支払いリンクを作る» のを止めるため。
+ */
+async function readCheckoutStatus(options: {
+  secretKey: string;
+  sessionId: string;
+  logger: Logger;
+  listingId: string;
+}): Promise<string> {
+  try {
+    const session = await retrieveCheckoutSession({
+      secretKey: options.secretKey,
+      sessionId: options.sessionId,
+    });
+    return session.status;
+  } catch (error) {
+    /*
+     * ★Stripe に無い Session（404 resource_missing）は «切れている» として扱う。★
+     * 鍵のアカウント違いやサンドボックスのリセットで起きる。払われることは無いのに、
+     * 例外にすると «二度と払えない投稿» が残る（2026-10 のレビュー）。
+     */
+    const detail = error instanceof AppError ? (error.detail ?? "") : "";
+    if (/status=404\b/.test(detail) && /code=resource_missing\b/.test(detail)) {
+      options.logger.warn("checkout session not found at stripe; treating as gone", {
+        listingId: options.listingId,
+      });
+      // «missing»: 失効の通知も来ないので、記録はこちらで閉じる（呼び出し側）。
+      return "missing";
+    }
+    options.logger.error("failed to read checkout session status", error, {
+      listingId: options.listingId,
+    });
+    throw new AppError(
+      "payment_failed",
+      "決済の状態を確認できませんでした。時間をおいてもう一度お試しください。",
+      { detail: `checkout session status unavailable: ${options.sessionId}` },
+    );
+  }
+}
+
+/**
+ * 決済の記録を expired にする。★まだ確定していない行だけ。★
+ * 同時に成立の通知が来て succeeded にした行を、上から書き戻さない。
+ */
+async function markPaymentExpired(db: Db, paymentId: string): Promise<void> {
+  await db
+    .update(payments)
+    .set({ status: "expired", updatedAt: new Date() })
+    .where(and(eq(payments.id, paymentId), inArray(payments.status, ["created", "pending"])));
+}
+
+/**
+ * 投稿の生きた支払いリンクを無効にする。決済待ちの投稿を削除・却下するときに呼ぶ。
+ * （監査 FN-07・ADM-15）
+ *
+ * 以前は状態を変えるだけで Stripe の Session を残していたので、消した投稿の
+ * 支払いリンクが期限まで払えた（消した投稿に110円）。
+ *
+ * 戻り値の paidInProgress は «払い終わった（complete）Session がある»。
+ * 本人の削除ではこれを見て止める（払った直後に消させない）。管理者の却下・削除は
+ * 止めない（運営の判断。払われていれば突き合わせの警報が拾い、規約第5条2項で返金）。
+ *
+ * ★Stripe に聞けなかった Session は «払われているかもしれない» として数える。★
+ */
+export async function cancelOpenCheckouts(options: {
+  db: Db;
+  env: AppEnv;
+  logger: Logger;
+  listingId: string;
+}): Promise<{ paidInProgress: boolean }> {
+  const { db, env, logger, listingId } = options;
+  const open = await db
+    .select({ id: payments.id, checkoutSessionId: payments.checkoutSessionId })
+    .from(payments)
+    .where(and(eq(payments.listingId, listingId), inArray(payments.status, ["created", "pending"])));
+  if (open.length === 0) return { paidInProgress: false };
+
+  const secretKey = requireSecret(env, "STRIPE_SECRET_KEY");
+  let paidInProgress = false;
+  for (const row of open) {
+    let state: string;
+    try {
+      state = await readCheckoutStatus({ secretKey, sessionId: row.checkoutSessionId, logger, listingId });
+    } catch {
+      paidInProgress = true;
+      continue;
+    }
+    if (state === "complete") {
+      paidInProgress = true;
+      continue;
+    }
+    /*
+     * ★記録を先に閉じてから Stripe で失効させる。★ 失効の通知（実測220ms）が
+     * 先に着くと «こちらが閉じた決済» と見分けられず、消した本人に «お支払いを
+     * 確認できませんでした» が届く。失効に失敗して実は払われていた場合も、
+     * 成立の通知は expired の行を成立にできる（handleSessionSucceeded）。
+     */
+    await markPaymentExpired(db, row.id);
+    if (state === "open") {
+      try {
+        await expireCheckoutSession({ secretKey, sessionId: row.checkoutSessionId });
+      } catch (error) {
+        // 聞いてから今までに払われた／切れた／通信の失敗。払われたものとして扱う（安全側）。
+        logger.warn("failed to expire checkout session on cancel", {
+          listingId,
+          paymentId: row.id,
+          detail: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+        });
+        paidInProgress = true;
+        /*
+         * ★切れたと確かめられなければ、記録を元に戻す。★（2026-10 のレビュー）
+         * expired のまま残すと、もう一度 «削除» を押したときに対象から外れて削除が
+         * 通る（払い終わっていたなら «払ったのに投稿が無い»）。通信の失敗で Session が
+         * 生きていれば、次の «支払う» が2本目のリンクを作る。
+         */
+        const again = await readCheckoutStatus({
+          secretKey,
+          sessionId: row.checkoutSessionId,
+          logger,
+          listingId,
+        }).catch(() => null);
+        if (again !== "expired" && again !== "missing") {
+          await db
+            .update(payments)
+            .set({ status: "created", updatedAt: new Date() })
+            .where(and(eq(payments.id, row.id), eq(payments.status, "expired")));
+        }
+      }
+    }
+  }
+  return { paidInProgress };
 }
 
 // ── Webhook ───────────────────────────────────────────────────────
@@ -334,8 +558,19 @@ export async function handleStripeEvent(options: {
       payloadDigest: await sha256Hex(options.rawPayload),
       status: "received",
     })
-    .onConflictDoNothing({
+    /*
+     * ★失敗した通知だけは、再送されたら処理し直す。★
+     * 以前は一意制約で «処理済み» として飛ばしていたので、原因を直してから
+     * Stripe のダッシュボードで再送しても処理されなかった（運用手順が効かない）。
+     * 処理済み・処理中（received）は今までどおり飛ばす。どの処理も条件付きの
+     * UPDATE で二重に効かない作りなので、やり直しても二重にはならない。
+     */
+    .onConflictDoUpdate({
       target: [paymentWebhookEvents.provider, paymentWebhookEvents.eventId],
+      set: { status: "received", errorMessage: null, processedAt: null, updatedAt: new Date() },
+      // 失敗したもの、または処理の途中で止まったもの（受け取ってから15分を過ぎても
+      // received のまま。突き合わせの countFailedWebhooks と同じ基準）。
+      setWhere: sql`${paymentWebhookEvents.status} = 'failed' or (${paymentWebhookEvents.status} = 'received' and ${paymentWebhookEvents.receivedAt} < now() - interval '15 minutes')`,
     });
 
   if ((inserted.rowCount ?? 0) === 0) {
@@ -400,6 +635,23 @@ async function markEvent(
     .where(eq(paymentWebhookEvents.eventId, eventId));
 }
 
+/**
+ * Webhook の記録に、どの決済・投稿の通知だったかを書く（監査 MON-03）。
+ * 以前は列があるのに一度も書いておらず、失敗した通知から対象を辿れなかった。
+ * 記録用なので、失敗しても本処理は止めない。
+ */
+async function linkEvent(
+  db: Db,
+  eventId: string,
+  refs: { paymentId: string; listingId: string | null },
+): Promise<void> {
+  await db
+    .update(paymentWebhookEvents)
+    .set({ paymentId: refs.paymentId, listingId: refs.listingId, updatedAt: new Date() })
+    .where(eq(paymentWebhookEvents.eventId, eventId))
+    .catch(() => undefined);
+}
+
 function readString(source: Record<string, unknown>, key: string): string | null {
   const value = source[key];
   return typeof value === "string" ? value : null;
@@ -442,12 +694,19 @@ async function handleSessionSucceeded(options: {
   const paymentStatus = readString(session, "payment_status");
   if (paymentStatus !== "paid") {
     // 後払いの手段では completed でも未入金のことがある。確認中で止める。
+    // ★確定済み（succeeded・返金・係争）の行は pending に戻さない。★（監査 PAY-04）
+    // 通知の到着順は Stripe の都合で決まる。戻すと、その後の返金で掲載が止まらない。
     await db
       .update(payments)
       .set({ status: "pending", updatedAt: new Date() })
-      .where(eq(payments.checkoutSessionId, sessionId));
+      .where(
+        and(
+          eq(payments.checkoutSessionId, sessionId),
+          inArray(payments.status, ["created", "expired"]),
+        ),
+      );
 
-    const pendingRow = await findPaymentBySession(db, sessionId);
+    const pendingRow = await findLinkedPaymentBySession(db, sessionId);
     if (pendingRow) {
       const moved = await transitionListing(db, {
         listingId: pendingRow.listingId,
@@ -471,9 +730,13 @@ async function handleSessionSucceeded(options: {
   const amountTotal = session.amount_total;
   const currency = readString(session, "currency");
 
-  const payment = await findPaymentBySession(db, sessionId);
+  const raw = await findPaymentBySession(db, sessionId);
+  // 参照が外れていても、どの決済の通知だったかは記録に残す（失敗した通知から辿れるように）。
+  if (raw) await linkEvent(db, event.id, { paymentId: raw.id, listingId: raw.listingId });
+  const payment = await findLinkedPaymentBySession(db, sessionId);
   if (!payment) {
-    // 自分のアカウント宛でない、あるいは記録が消えている。公開しない。
+    // 自分のアカウント宛でない、記録が消えている、または投稿・利用者の参照が
+    // 外れている（退会・180日の削除）。公開しない。
     throw new Error(`no payment row for session ${sessionId}`);
   }
 
@@ -483,7 +746,10 @@ async function handleSessionSucceeded(options: {
     !isValidListingFeePayment(
       typeof amountTotal === "number" ? amountTotal : null,
       currency,
-    )
+    ) ||
+    // 設定の EXPECTED_CURRENCY とも突き合わせる（監査 E-7-1。以前は何にも使われていなかった）。
+    // 設定が無い環境で成立の通知が全部落ちないよう、無ければ定数で照合する。
+    currency?.toLowerCase() !== (env.EXPECTED_CURRENCY ?? LISTING_FEE_CURRENCY).toLowerCase()
   ) {
     await db
       .update(payments)
@@ -553,6 +819,11 @@ async function handleSessionSucceeded(options: {
      * こちらも同じ形にする。当たらなければ「もう別の状態へ進んだ」で止める。
      * すでに succeeded（同じ支払いの別イベント）は通す。冪等に公開済みを
      * 確かめる下のループが受け止める。
+     *
+     * ★expired も通す。★（監査 PAY-01 の二重の守り）Stripe が «払われた» と
+     * 言っている以上、こちらの記録が expired でもお金は受け取っている。
+     * 以前の版が払い終わった Session を expired と記録していた行や、
+     * 失効の通知と成立の通知の行き違いでも、掲載は必ず出す。
      */
     const claimed = await tx
       .update(payments)
@@ -565,7 +836,7 @@ async function handleSessionSucceeded(options: {
       .where(
         and(
           eq(payments.id, payment.id),
-          inArray(payments.status, ["created", "pending", "succeeded"]),
+          inArray(payments.status, ["created", "pending", "succeeded", "expired"]),
         ),
       );
     if ((claimed.rowCount ?? 0) === 0) {
@@ -686,9 +957,11 @@ async function handleSessionSucceeded(options: {
 /**
  * Session ID から決済記録を引く。
  *
- * ★退会で参照が外れた行（listing_id / user_id が null）は返さない。★
- * 決済の記録としては残すが、公開や通知の対象にはならない。
- * ここで弾いておかないと、消えた投稿を公開しようとして落ちる。
+ * ★参照が外れた行（listing_id / user_id が null）も返す。★（監査 PAY-03）
+ * 退会や、掲載終了から180日の物理削除で投稿・利用者の参照は外れるが、
+ * 決済の記録は7年残す帳簿。以前はここで null を返していたので、その後の
+ * 失効・返金・係争が «他サービスの決済» として無視され、帳簿が実態と食い違った。
+ * 投稿に触る処理は呼び出し側で listingId の有無を見る。
  */
 async function findPaymentBySession(db: Db, sessionId: string) {
   const rows = await db
@@ -703,13 +976,20 @@ async function findPaymentBySession(db: Db, sessionId: string) {
     .from(payments)
     .where(eq(payments.checkoutSessionId, sessionId))
     .limit(1);
+  return rows[0] ?? null;
+}
 
-  const row = rows[0];
+/**
+ * 公開・通知に使う版。★投稿と利用者の両方に結び付いた行だけを返す。★
+ * 消えた投稿を公開しようとして落ちないように。
+ */
+async function findLinkedPaymentBySession(db: Db, sessionId: string) {
+  const row = await findPaymentBySession(db, sessionId);
   if (!row?.listingId || !row.userId) return null;
   return { ...row, listingId: row.listingId, userId: row.userId };
 }
 
-/** payment_intent から引く版。同じく参照が外れた行は返さない */
+/** payment_intent から引く版。★参照が外れた行も返す★（監査 PAY-03） */
 async function findPaymentByIntent(db: Db, paymentIntentId: string) {
   const rows = await db
     .select({
@@ -722,10 +1002,7 @@ async function findPaymentByIntent(db: Db, paymentIntentId: string) {
     .from(payments)
     .where(eq(payments.paymentIntentId, paymentIntentId))
     .limit(1);
-
-  const row = rows[0];
-  if (!row?.listingId || !row.userId) return null;
-  return { ...row, listingId: row.listingId, userId: row.userId };
+  return rows[0] ?? null;
 }
 
 /** 決済の失敗・失効。投稿は下書きへ戻す（再課金は発生しない） */
@@ -740,10 +1017,19 @@ async function handleSessionFailed(
 
   const payment = await findPaymentBySession(db, sessionId);
   if (!payment) return;
+  await linkEvent(db, event.id, { paymentId: payment.id, listingId: payment.listingId });
   if (payment.status === "succeeded") {
     // 支払い済みの Session に対する失効通知は無視する。
     return;
   }
+  /*
+   * ★こちらが自分で閉じた決済の失効通知では、投稿にも利用者にも触れない。★
+   * やり直し・削除・却下で /expire すると、Stripe は直後（実測220ms）に失効の
+   * 通知を送ってくる。それを «決済が失効した» と扱うと、払ったばかりの本人や
+   * 投稿を消した本人に «お支払いを確認できませんでした» が届き、投稿が下書きへ
+   * 戻ることがあった（2026-10 のレビュー）。行はすでに expired / failed なので見分けられる。
+   */
+  const closedByUs = payment.status === "expired" || payment.status === "failed";
 
   await db
     .update(payments)
@@ -752,7 +1038,26 @@ async function handleSessionFailed(
       failureCode: reason,
       updatedAt: new Date(),
     })
-    .where(eq(payments.id, payment.id));
+    .where(
+      and(
+        eq(payments.id, payment.id),
+        // 確定済みの行（成立・返金・係争）を失効・失敗で上書きしない。
+        inArray(payments.status, ["created", "pending", "expired"]),
+      ),
+    );
+
+  // 投稿・利用者の参照が外れた決済は、記録を合わせるだけ（監査 PAY-03）。
+  const listingId = payment.listingId;
+  const userId = payment.userId;
+  if (!listingId || !userId) return;
+  if (closedByUs) {
+    options.logger.info("ignored failure notice for a checkout we closed", {
+      listingId,
+      paymentId: payment.id,
+      reason,
+    });
+    return;
+  }
 
   /*
    * ★追い越された失効通知で、進行中の決済を壊さない。★
@@ -774,7 +1079,7 @@ async function handleSessionFailed(
     .from(payments)
     .where(
       and(
-        eq(payments.listingId, payment.listingId),
+        eq(payments.listingId, listingId),
         gt(payments.id, payment.id),
       ),
     )
@@ -782,30 +1087,37 @@ async function handleSessionFailed(
 
   if (newer.length > 0) {
     options.logger.info("ignored superseded checkout failure", {
-      listingId: payment.listingId,
+      listingId,
       paymentId: payment.id,
       reason,
     });
     return;
   }
 
+  let reverted = false;
   for (const from of ["payment_pending", "payment_processing"] as const) {
     const result = await transitionListing(db, {
-      listingId: payment.listingId,
+      listingId,
       to: "draft",
       actor: "system",
       expectedFrom: from,
     });
-    if (result.changed) break;
+    if (result.changed) {
+      reverted = true;
+      break;
+    }
   }
+  // ★下書きに戻せなかった（削除・却下・公開済み）なら、«下書きとして残っています» の
+  // 通知は送らない。★ 事実と食い違う（2026-10 のレビュー、監査 FN-12 の型）。
+  if (!reverted) return;
 
   await afterResponse(options.defer, () =>
     notifyPaymentFailed({
       db,
       env: options.env,
       logger: options.logger,
-      listingId: payment.listingId,
-      userId: payment.userId,
+      listingId,
+      userId,
       attempt: payment.id,
     }).catch((error: unknown) => {
       options.logger.error("payment failure notification failed", error);
@@ -836,6 +1148,7 @@ async function handleRefundEvent(options: {
 
   const payment = await findPaymentByIntent(db, paymentIntentId);
   if (!payment) return; // 他サービスの決済。自分の DB に無いので無視する
+  await linkEvent(db, event.id, { paymentId: payment.id, listingId: payment.listingId });
 
   if (payment.status === "refunded" || payment.status === "disputed") {
     // すでに確定している。無駄な処理を省くための先読みで、これは
@@ -887,9 +1200,57 @@ async function handleRefundEvent(options: {
 
   if (!isFullRefund) return;
 
+  const listingId = payment.listingId;
+  if (!listingId) {
+    // ★投稿の参照が外れた決済の返金も、帳簿には残す。★（監査 PAY-03）
+    // 止める掲載はもう無い。監査ログは決済を対象にして書く。
+    await writeAuditLog(db, env, {
+      action: "payment.refunded",
+      actorId: payment.userId,
+      actorRole: "system",
+      targetType: "payment",
+      targetId: payment.id,
+      metadata: { refundedAmountJpy: refundedAmount },
+    });
+    logger.info("refund recorded for a detached payment", { paymentId: payment.id });
+    return;
+  }
+
+  /*
+   * ★二重払いの片方の返金では、投稿を止めない。★
+   * 同じ投稿にほかの成立した支払いが残っていれば、掲載料は払われている。
+   * 止めると、二重払いを返金しただけで掲載が消える（突き合わせの duplicate_paid の対応）。
+   */
+  const otherPaid = await db
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.listingId, listingId),
+        eq(payments.status, "succeeded"),
+        ne(payments.id, payment.id),
+      ),
+    )
+    .limit(1);
+  if (otherPaid.length > 0) {
+    await writeAuditLog(db, env, {
+      action: "payment.refunded",
+      actorId: payment.userId,
+      actorRole: "system",
+      targetType: "listing",
+      targetId: listingId,
+      metadata: { refundedAmountJpy: refundedAmount, duplicate: "true" },
+    });
+    logger.info("refund of a duplicate payment; listing stays published", {
+      listingId,
+      paymentId: payment.id,
+    });
+    return;
+  }
+
   // ★返金したのに掲載が続く状態を作らない。★
   const suspended = await transitionListing(db, {
-    listingId: payment.listingId,
+    listingId,
     to: "suspended",
     actor: "system",
     expectedFrom: "published",
@@ -901,7 +1262,7 @@ async function handleRefundEvent(options: {
     actorId: payment.userId,
     actorRole: "system",
     targetType: "listing",
-    targetId: payment.listingId,
+    targetId: listingId,
     metadata: { refundedAmountJpy: refundedAmount },
   });
 
@@ -916,9 +1277,7 @@ async function handleRefundEvent(options: {
    * 運用でログを見る人が、止まっていないものを止まったと読む。
    */
   if (suspended.changed) {
-    logger.warn("listing suspended after full refund", {
-      listingId: payment.listingId,
-    });
+    logger.warn("listing suspended after full refund", { listingId });
     return;
   }
 
@@ -934,7 +1293,7 @@ async function handleRefundEvent(options: {
    * ★記録は残す。★ 返金と掲載の状態が食い違う唯一の入口なので。
    */
   logger.warn("refund on a listing that was not published", {
-    listingId: payment.listingId,
+    listingId,
     listingStatus: suspended.from,
   });
 }
@@ -952,6 +1311,7 @@ async function handleDispute(options: {
 
   const payment = await findPaymentByIntent(db, paymentIntentId);
   if (!payment) return;
+  await linkEvent(db, event.id, { paymentId: payment.id, listingId: payment.listingId });
 
   /*
    * 返金済みの上には書かない。返金が確定したあとに申し立てが届くことは
@@ -969,8 +1329,21 @@ async function handleDispute(options: {
       ),
     );
 
+  const listingId = payment.listingId;
+  if (!listingId) {
+    // ★投稿の参照が外れた決済の係争も、帳簿には残す。★（監査 PAY-03）
+    await writeAuditLog(db, env, {
+      action: "payment.disputed",
+      actorRole: "system",
+      targetType: "payment",
+      targetId: payment.id,
+    });
+    options.logger.warn("dispute recorded for a detached payment", { paymentId: payment.id });
+    return;
+  }
+
   const suspended = await transitionListing(db, {
-    listingId: payment.listingId,
+    listingId,
     to: "suspended",
     actor: "system",
     expectedFrom: "published",
@@ -981,7 +1354,7 @@ async function handleDispute(options: {
     action: "payment.disputed",
     actorRole: "system",
     targetType: "listing",
-    targetId: payment.listingId,
+    targetId: listingId,
   });
 
   /*
@@ -992,14 +1365,12 @@ async function handleDispute(options: {
    * （返金・公開で同じ穴を踏んでいる。2026-08-16）
    */
   if (suspended.changed) {
-    options.logger.warn("listing suspended after dispute", {
-      listingId: payment.listingId,
-    });
+    options.logger.warn("listing suspended after dispute", { listingId });
   } else if (suspended.from !== "suspended" && suspended.from !== "deleted") {
     options.logger.error(
       "dispute could not stop the listing",
       new Error("suspend transition did not apply"),
-      { listingId: payment.listingId, listingStatus: suspended.from },
+      { listingId, listingStatus: suspended.from },
     );
   }
 }
@@ -1043,12 +1414,26 @@ export async function refundPayment(options: {
     });
   }
 
-  await createRefund({
+  const refund = await createRefund({
     secretKey: requireSecret(env, "STRIPE_SECRET_KEY"),
     paymentIntentId: payment.paymentIntentId,
     amountJpy: payment.amountJpy,
     idempotencyKey: `refund:${paymentId}`,
   });
+
+  /*
+   * ★返金の要求が通っても、返金が失敗していることがある。★（監査 PAY-05）
+   * Stripe は 200 で refund を返し、その status が failed / canceled のことがある。
+   * 見ないと «返金した» つもりで終わる。管理画面に失敗として返す。
+   */
+  if (refund.status === "failed" || refund.status === "canceled") {
+    options.logger.error("refund was not accepted by stripe", new Error(`refund status=${refund.status}`), {
+      paymentId,
+    });
+    throw new AppError("payment_failed", "返金が完了しませんでした。Stripe のダッシュボードで状況を確かめてください。", {
+      detail: `refund ${refund.id} status=${refund.status}`,
+    });
+  }
 
   // 実際の状態更新は Webhook（refund.created / charge.refunded）で行う。
   // ここで先に書き換えると、Stripe 側が失敗したときに食い違う。
@@ -1096,7 +1481,15 @@ export async function getPaymentStateForListing(
         inArray(payments.status, ["created", "pending", "succeeded", "failed", "expired"]),
       ),
     )
-    .orderBy(desc(payments.createdAt))
+    /*
+     * ★«いちばん進んだ» 決済を見る。★ 以前は最新の1行だったので、払い終わった1本目の
+     * 後にこちらが閉じた2本目（expired）を拾い、払った本人に «お支払いを確認できません
+     * でした» と出ていた（2026-10 のレビュー）。成立 → 確認中・作成済み → 失敗・失効 の順。
+     */
+    .orderBy(
+      sql`case ${payments.status} when 'succeeded' then 0 when 'pending' then 1 when 'created' then 1 else 2 end`,
+      desc(payments.createdAt),
+    )
     .limit(1);
   return rows[0] ?? null;
 }
