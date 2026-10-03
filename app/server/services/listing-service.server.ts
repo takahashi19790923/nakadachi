@@ -4,6 +4,7 @@ import {
   categories,
   listingCategoryDetails,
   listings,
+  payments,
 } from "~/db/schema/index.ts";
 import {
   CATEGORIES,
@@ -324,6 +325,29 @@ export async function transitionListing(
   }
 
   assertTransition(from, options.to, options.actor);
+
+  /*
+   * ★管理者は、一度も公開されたことの無い投稿を支払いなしで公開できない。★（監査 AUTHZ-01）
+   *
+   * 遷移表は «却下 → 公開（戻す）» を管理者に許している。戻す先が «公開されたことの
+   * ある投稿» なら復帰だが、決済待ちから却下した投稿（published_at が無い）を戻すと
+   * ★110円を払っていない投稿が新しく公開されていた。★ 公開は支払い成立の経路だけ、
+   * という原則に合わせ、成立した決済が無ければ止める。
+   */
+  if (options.to === "published" && options.actor === "admin" && !current.publishedAt) {
+    const paid = await executor
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.listingId, options.listingId), eq(payments.status, "succeeded")))
+      .limit(1);
+    if (paid.length === 0) {
+      throw new AppError(
+        "conflict",
+        "掲載料のお支払いが確認できない投稿は、管理画面から公開できません。",
+        { detail: `admin publish without payment: ${options.listingId}` },
+      );
+    }
+  }
 
   const now = new Date();
   const values: Record<string, unknown> = {

@@ -14,6 +14,7 @@ import { requireAdminGate } from "~/server/guards.server";
 import { getListingForOwner } from "~/server/repositories/listing-repository.server";
 import { transitionListing } from "~/server/services/listing-service.server";
 import { notifyListingSuspended } from "~/server/services/notification-service.server";
+import { cancelOpenCheckouts } from "~/server/services/payment/payment-service.server";
 import { formString } from "~/domain/validation/common";
 import type { Route } from "./+types/admin.listing-detail";
 import { getApp } from "~/server/app-context";
@@ -126,6 +127,35 @@ export async function action({ request, context: rawContext, params }: Route.Act
         request,
       });
     });
+
+    /*
+     * ★却下・削除した投稿の支払いリンクを無効にする。★（監査 ADM-15）
+     * 決済待ちの投稿だけが生きたリンクを持つ（公開済みの決済は確定済みで対象外）。
+     * 管理者の判断は止めない。払い終わっていたら突き合わせの警報が拾い、
+     * 規約第5条2項（お支払いの後・公開の前の却下・削除は全額返金）で返す。
+     */
+    if (target === "rejected" || target === "deleted") {
+      // ★失効に失敗しても、却下・削除の記録と通知は残す。★ 遷移はもう済んでいる。
+      try {
+        const { paidInProgress } = await cancelOpenCheckouts({
+          db,
+          env: context.env,
+          logger: context.logger,
+          listingId: params.listingId,
+        });
+        if (paidInProgress) {
+          context.logger.warn("admin closed a listing whose checkout may be paid", {
+            listingId: params.listingId,
+            target,
+          });
+        }
+      } catch (error) {
+        context.logger.error("failed to cancel open checkouts after admin action", error, {
+          listingId: params.listingId,
+          target,
+        });
+      }
+    }
 
     // ★非公開にしても自動返金はしない。★ 返金は決済状況の画面から明示的に行う。
     if (target === "suspended" || target === "rejected") {
