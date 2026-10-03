@@ -18,8 +18,11 @@ import {
   SESSION_ABSOLUTE_MAX_SECONDS,
   SESSION_IDLE_SECONDS,
 } from "~/server/session.server";
+import { RATE_LIMITS } from "~/server/rate-limit.server";
 import {
+  MAX_OTP_ATTEMPTS,
   requestLoginCode,
+  TOKEN_TTL_MINUTES,
   verifyLoginOtp,
 } from "~/server/services/auth-service.server";
 import { closeTestDb, resetDatabase, testEnv, testLogger } from "./helpers.ts";
@@ -260,6 +263,12 @@ describe("OTP による確認", () => {
     ).rejects.toThrow();
   });
 
+  /*
+   * ★«何か投げた» では見ない。理由まで見る。★（監査 AUTH-06）
+   * 以前は rejects.toThrow() だけで、6回目が «回数制限» で止まっていても緑だった。
+   * 実際、試行の上限の処理には一度も届いておらず、MAX_OTP_ATTEMPTS を 500 に
+   * しても緑のままだった。
+   */
   it("★試行回数の上限に達するとトークンごと無効になる★", async () => {
     await requestLoginCode({ db, env, logger: testLogger, request: req(), email });
     const otp = latestOtp();
@@ -275,13 +284,51 @@ describe("OTP による確認", () => {
           email,
           otp: wrong,
         }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "validation_failed" });
     }
 
-    // 正しいコードでももう通らない
+    // 正しいコードでも、6回目は «試行の上限» で止まる（回数制限ではない）。
     await expect(
       verifyLoginOtp({ db, env, logger: testLogger, request: req(), email, otp }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "validation_failed" });
+
+    // トークンは使用済みになっている（生きたまま残らない）。
+    const alive = await db
+      .select({ id: emailVerificationTokens.id })
+      .from(emailVerificationTokens)
+      .where(isNull(emailVerificationTokens.consumedAt));
+    expect(alive).toHaveLength(0);
+
+    // 失敗はすべて理由つきで残る（6回目も）。
+    const failures = await db
+      .select({ metadata: auditLogs.metadata })
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "auth.login_failed"));
+    const reasons = failures.map((row) => row.metadata?.reason);
+    expect(reasons.filter((r) => r === "otp_mismatch")).toHaveLength(5);
+    expect(reasons.filter((r) => r === "attempt_limit")).toHaveLength(1);
+
+    // 7回目は、もう有効なトークンが無い。
+    await expect(
+      verifyLoginOtp({ db, env, logger: testLogger, request: req(), email, otp }),
+    ).rejects.toMatchObject({ code: "validation_failed" });
+    const after = await db
+      .select({ metadata: auditLogs.metadata })
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "auth.login_failed"));
+    expect(after.map((row) => row.metadata?.reason)).toContain("no_token");
+  });
+
+  /*
+   * ★同時の試行を抑えるのは «トークン単位の回数制限»。★ 試行回数（attemptCount）は
+   * 読んでから足すので、同時に来ると同じ値を読んですり抜ける。回数制限の窓が
+   * トークンの寿命を覆っていないと、窓が切れた後にもう一度まとめて試せる。
+   */
+  it("トークン単位の回数制限は、トークンの寿命と上限を覆っている", () => {
+    expect(RATE_LIMITS.authVerifyByToken.windowSeconds).toBeGreaterThanOrEqual(
+      TOKEN_TTL_MINUTES * 60,
+    );
+    expect(RATE_LIMITS.authVerifyByToken.max).toBeLessThanOrEqual(MAX_OTP_ATTEMPTS);
   });
 
   it("期限切れのコードは通らない", async () => {

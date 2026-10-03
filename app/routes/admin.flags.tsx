@@ -65,23 +65,26 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       notice: formString(formData, "notice"),
     };
 
-    const flags = await setSiteFlags(db, admin.id, next);
-
     /*
      * ★誰が・いつ・なぜ止めたかを残す。★ 止めたことより、
      * 「戻し忘れ」のほうが後から効いてくる。
+     * 本処理と記録は1つのトランザクションにする（監査 ADM-03）。
      */
-    await writeAdminAction(db, {
-      adminId: admin.id,
-      actionType: "site_flags_change",
-      targetType: "site",
-      targetId: "singleton",
-      reason,
-      metadata: {
-        signupsPaused: next.signupsPaused ? 1 : 0,
-        listingsPaused: next.listingsPaused ? 1 : 0,
-        messagesPaused: next.messagesPaused ? 1 : 0,
-      },
+    const flags = await db.transaction(async (tx) => {
+      const saved = await setSiteFlags(tx, admin.id, next);
+      await writeAdminAction(tx, {
+        adminId: admin.id,
+        actionType: "site_flags_change",
+        targetType: "site",
+        targetId: "singleton",
+        reason,
+        metadata: {
+          signupsPaused: next.signupsPaused ? 1 : 0,
+          listingsPaused: next.listingsPaused ? 1 : 0,
+          messagesPaused: next.messagesPaused ? 1 : 0,
+        },
+      });
+      return saved;
     });
 
     return { csrfToken: context.csrfToken, flags, saved: true };

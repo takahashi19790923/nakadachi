@@ -36,12 +36,15 @@ export const blockSchema = z.object({
 
 export const contactSchema = z.object({
   email: emailSchema,
-  subject: trimmedString.pipe(
-    z
-      .string()
-      .min(1, "件名を入力してください")
-      .max(120, "120文字以内で入力してください"),
-  ),
+  // ★件名は1行。★ 改行はメールのヘッダに入るので空白に潰す（監査 SEC-05。出口でも潰している）。
+  subject: trimmedString
+    .transform((value) => value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim())
+    .pipe(
+      z
+        .string()
+        .min(1, "件名を入力してください")
+        .max(120, "120文字以内で入力してください"),
+    ),
   body: trimmedString.pipe(
     z
       .string()

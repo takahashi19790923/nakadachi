@@ -137,7 +137,11 @@ const ALLOWED: Readonly<
   suspended: {
     // 管理者が判断を取り消したときだけ戻せる。本人は戻せない。
     published: ["admin"],
-    closed: ["owner"],
+    /*
+     * ★本人は停止された投稿を終了・削除へ進められない。★（監査 AUTHZ-03）
+     * 以前は suspended → closed（本人）→ deleted（本人）と進められ、運営の判断の
+     * 根拠が保持期間の掃除に回っていた。停止は人が判断して消す決まり。
+     */
     deleted: ["admin"],
   },
   rejected: {
@@ -249,6 +253,29 @@ export function closePageMode(status: ListingStatus): ClosePageMode {
    * のは別の話で、管理者側は #52 で配線した。ここは題名の直しに留める。
    */
   return "blocked";
+}
+
+/**
+ * «いまは削除できません» の画面の説明。★状態ごとに書く。★（監査 FN-10）
+ * 以前はどの状態でも «お支払いの確認中です» と出ていて、停止・却下・終了した
+ * 投稿の持ち主に事実と違うことを伝えていた。
+ */
+export function blockedCloseMessage(status: ListingStatus): string {
+  switch (status) {
+    case "payment_processing":
+      return "お支払いの確認中です。確認が終わってから、あらためて操作してください。確認が取れなかった場合は下書きに戻ります。";
+    // 返金・決済の申し立てで止めた場合はメールが出ないので、«お知らせしている場合は» に留める。
+    case "suspended":
+      return "この投稿は運営者が非公開にしています。この画面からは削除できません。理由をメールでお知らせしている場合は、そちらをご覧ください。ご不明な点はお問い合わせください。";
+    case "rejected":
+      return "運営者がこの投稿の掲載を見送りました。この画面からは削除できません。理由をメールでお知らせしている場合は、そちらをご覧ください。ご不明な点はお問い合わせください。";
+    case "closed":
+      return "この投稿の掲載は終了しています。";
+    case "deleted":
+      return "この投稿は削除されています。";
+    default:
+      return "この投稿は、いまは操作できません。";
+  }
 }
 
 export const CLOSE_PAGE_TITLE: Readonly<Record<ClosePageMode, string>> = {

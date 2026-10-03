@@ -10,6 +10,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { toPublicError } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { DELETION_GRACE_DAYS } from "~/domain/account";
 import {
   cancelAccountDeletion,
@@ -69,6 +70,15 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     if (!parsed.success) {
       return { fields: toFieldErrors(parsed.error), message: null, done: false };
     }
+
+    /*
+     * ★申込だけを数える。取り消しは数えない。★（監査 SEC-12）
+     * 申込のたびに新しい依頼 ID でメールが1通出るので、取り消しと交互に繰り返すと
+     * サービス全体の1日の送信枠を使い切れた。取り消しは利用者のデータを守る操作なので
+     * 止めない（止めると、上限に当たった人が退会を取り消せなくなる）。
+     * 入力の打ち間違いで枠を減らさないよう、検証を通った後で数える。
+     */
+    await enforceRateLimit(db, "accountDeletionToggle", user.id);
 
     const deletion = await requestAccountDeletion(db, user.id);
 

@@ -356,6 +356,12 @@ DB を使わない画面（規約・ログイン・お問い合わせ）は `DAT
 Turnstile はローカルでは Cloudflare のテスト鍵（常に成功）を使います。
 共有ウィジェットのホスト名に `localhost` は入っていません。
 
+> **ローカルでは IP 単位の回数制限を全員で1枠として数えます。**
+> 接続元 IP（`cf-connecting-ip`）が無い要求は、制限を飛ばさずに «unknown» の1枠で数えるためです。
+> ローカルでは10分のうちに、ログインメールの要求が10回、コード・リンクの確認が20回、
+> 問い合わせが5回を超えると止まります。リンクでのログインは、止まっても
+> «リンクが無効» と出ます。続けて試すときは、開発用 DB の `rate_limits` を空にしてください。
+
 ```bash
 pnpm run lint         # ESLint
 pnpm run typecheck    # wrangler types + react-router typegen + tsc

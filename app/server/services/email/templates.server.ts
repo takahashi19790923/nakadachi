@@ -325,32 +325,68 @@ export function accountDeletionEmail(options: {
  * といった「どちらの画面にもエラーが出ない壊れ方」を知らせる。
  * 件名を日本語にしていないのは、受信箱で絞り込みやすくするため。
  */
+export type OpsPaymentAlertKind =
+  | "paid_not_published"
+  | "refunded_but_live"
+  | "failed_webhooks"
+  | "webhook_never_arrived"
+  | "duplicate_paid"
+  | "paid_webhook_failed"
+  | "published_without_payment";
+
 export function opsPaymentAlertEmail(options: {
-  kind:
-    | "paid_not_published"
-    | "refunded_but_live"
-    | "failed_webhooks"
-    | "webhook_never_arrived";
+  kind: OpsPaymentAlertKind;
   listingTitle: string;
   listingStatus: string;
   adminUrl: string;
 }): EmailContent {
-  const heading =
-    options.kind === "paid_not_published"
-      ? "決済は成立したが掲載が出ていない"
-      : options.kind === "refunded_but_live"
-        ? "返金済みなのに掲載が続いている"
-        : options.kind === "webhook_never_arrived"
-          ? "★Stripe からの通知が届いていない★"
-          : "処理できていない決済通知がある";
-  const detail =
-    options.kind === "paid_not_published"
-      ? "利用者は110円を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。"
-      : options.kind === "refunded_but_live"
-        ? "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。"
-        : options.kind === "webhook_never_arrived"
-          ? "Checkout Session の期限を過ぎたのに、成立の通知も失効の通知も届いていません。Stripe は期限が来れば必ずどちらかを送るので、★通知の経路そのものが切れている疑いが濃厚です★（送信先の未作成・URL の誤り・署名シークレットの不一致）。この状態では、支払いが済んでいても掲載は出ず、他のどの警報にも掛かりません。Stripe ダッシュボードの「Webhook」で送信先と直近の応答コードを確認してください。"
-          : "Stripe からの通知を受け取ったのに処理を終えられていないものがあります。Stripe には 200 を返しているので再送されず、投稿側にも痕跡が残らない場合があります（決済記録の作成に失敗した Session など）。payment_webhook_events を確認してください。";
+  // 金額は定数から（監査 FN-01。直書きは料金を変えたとき取り残される）。
+  const fee = `${LISTING_FEE_JPY.toLocaleString("ja-JP")}円`;
+  const texts: Record<OpsPaymentAlertKind, { heading: string; detail: string }> = {
+    paid_not_published: {
+      heading: "決済は成立したが掲載が出ていない",
+      detail: `利用者は${fee}を支払っていますが、投稿が公開されていません。Stripe 側は成功として終わっているため、放置すると利用者は払ったまま去ります。`,
+    },
+    refunded_but_live: {
+      heading: "返金済みなのに掲載が続いている",
+      detail:
+        "全額返金済みの投稿が公開されたままです。返金したのに掲載が続いている状態で、決済事業者側にもアプリのエラーにも出ません。",
+    },
+    webhook_never_arrived: {
+      heading: "★Stripe からの通知が届いていない★",
+      detail:
+        "Checkout Session の期限を過ぎたのに、成立の通知も失効の通知も届いていません。Stripe は期限が来れば必ずどちらかを送るので、★通知の経路そのものが切れている疑いが濃厚です★（送信先の未作成・URL の誤り・署名シークレットの不一致）。この状態では、支払いが済んでいても掲載は出ず、他のどの警報にも掛かりません。Stripe ダッシュボードの「Webhook」で送信先と直近の応答コードを確認してください。",
+    },
+    failed_webhooks: {
+      heading: "処理できていない決済通知がある",
+      detail:
+        "Stripe からの通知を受け取ったのに処理を終えられていないものがあります。Stripe には 200 を返しているので再送されず、投稿側にも痕跡が残らない場合があります（決済記録の作成に失敗した Session など）。payment_webhook_events を確認してください。",
+    },
+    duplicate_paid: {
+      heading: "同じ投稿に支払いが2回成立している",
+      detail: `1つの投稿に${fee}の支払いが2回成立しています（画面の連打や、支払い中にもう一度 «支払う» を押した場合）。利用者の明細に2回残ります。新しい方の決済を返金してください。`,
+    },
+    paid_webhook_failed: {
+      heading: "★支払い成立の通知を処理できず、掲載が出ていない疑い★",
+      detail:
+        "支払い成立の通知の処理に失敗し、決済の記録が成立になっていません。お金を受け取っているのに掲載が出ていない可能性が高いです。Stripe のダッシュボードで支払いを確かめ、掲載を出すか返金してください。",
+    },
+    published_without_payment: {
+      heading: "支払いの記録が無いのに公開された投稿がある",
+      detail:
+        "支払いが一度も成立していない投稿が、公開されたことがあります。公開は支払い成立の経路だけのはずです。管理画面の操作や不具合で公開された疑いがあります。",
+    },
+  };
+  const { heading, detail } = texts[options.kind];
+  /*
+   * ★送られ方を種類ごとに正しく書く。★（監査 MON-02）
+   * 処理できていない通知の警報は «1日1通» で、直すまで毎日届く。以前は全部に
+   * «同じ決済につき1回» と書いていて、受け取った側が «もう来ない» と読んだ。
+   */
+  const cadence =
+    options.kind === "failed_webhooks"
+      ? "この通知は、処理できていない通知が残っているあいだ1日1回送られます。"
+      : "この通知は同じ対象につき1回だけ送られます。対応しても再送はされません。";
 
   const { html, text } = layout({
     heading,
@@ -359,7 +395,7 @@ export function opsPaymentAlertEmail(options: {
       <p style="margin:0 0 12px"><strong>${escapeHtml(options.listingTitle)}</strong><br>
       現在の状態: ${escapeHtml(options.listingStatus)}</p>
       <p style="margin:0;font-size:13px;color:#6d6759">
-        この通知は同じ決済につき1回だけ送られます。対応しても再送はされません。
+        ${escapeHtml(cadence)}
       </p>`,
     bodyText: [
       detail,
@@ -367,7 +403,7 @@ export function opsPaymentAlertEmail(options: {
       options.listingTitle,
       `現在の状態: ${options.listingStatus}`,
       "",
-      "この通知は同じ決済につき1回だけ送られます。",
+      cadence,
     ].join("\n"),
     actionUrl: options.adminUrl,
     actionLabel: "決済状況を開く",

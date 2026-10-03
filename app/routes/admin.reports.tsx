@@ -69,33 +69,38 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
 
     // ★当たったかどうかを必ず確かめる。★ 素通りさせると「対応しました」と
     // 出るのに通報は未対応のまま残り、対応漏れが隠れる。
-    const resolved = await resolveReport(db, {
-      reportId,
-      status,
-      adminId: admin.id,
-      note,
+    // ★本処理と記録を1つのトランザクションにする。★（監査 ADM-03）
+    const resolved = await db.transaction(async (tx) => {
+      const done = await resolveReport(tx, {
+        reportId,
+        status,
+        adminId: admin.id,
+        note,
+      });
+      if (!done) return false;
+
+      await writeAdminAction(tx, {
+        adminId: admin.id,
+        actionType: "report_resolve",
+        targetType: "report",
+        targetId: reportId,
+        reason: note,
+        metadata: { status },
+      });
+      await writeAuditLog(tx, context.env, {
+        action: "admin.report_resolved",
+        actorId: admin.id,
+        actorRole: "admin",
+        targetType: "report",
+        targetId: reportId,
+        request,
+        metadata: { status },
+      });
+      return true;
     });
     if (!resolved) {
       return { message: "対象の通報が見つかりませんでした。" };
     }
-
-    await writeAdminAction(db, {
-      adminId: admin.id,
-      actionType: "report_resolve",
-      targetType: "report",
-      targetId: reportId,
-      reason: note,
-      metadata: { status },
-    });
-    await writeAuditLog(db, context.env, {
-      action: "admin.report_resolved",
-      actorId: admin.id,
-      actorRole: "admin",
-      targetType: "report",
-      targetId: reportId,
-      request,
-      metadata: { status },
-    });
 
     return { message: null };
   } catch (error) {
@@ -179,10 +184,6 @@ export default function AdminReports({
       {reports.length === 0 ? (
         <p className="mt-6 text-washi-600">通報はありません。</p>
       ) : null}
-
-      <p className="mt-8 text-sm text-washi-600">
-        通報対応で会話の内容を確認した場合も、閲覧の事実が監査ログに記録されます。
-      </p>
     </div>
   );
 }

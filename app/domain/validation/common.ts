@@ -17,7 +17,27 @@ import "./zod-setup";
  */
 export const trimmedString = z
   .string()
-  .transform((value) => value.replace(/　/g, " ").trim());
+  .transform((value) => stripInvisibleControls(value).replace(/　/g, " ").trim());
+
+/**
+ * 見えない制御文字を落とす（監査 SEC-08）。
+ *
+ * ★改行・タブは残す。★ 落とすのは、表示を乱す・見分けをつかなくするもの:
+ *  - C0/C1 の制御文字（U+0000 は DB で汎用エラーになっていた）
+ *  - ゼロ幅文字（U+200B・U+200C・U+200E・U+200F・U+2060〜U+2064・U+FEFF）… «闇\u200Bバイト» のように
+ *    禁止語の照合をすり抜け、表示名を見分けのつかない形にする
+ *  - 双方向の制御（U+202A〜U+202E・U+2066〜U+2069）… 題名の見た目を反転させる
+ */
+export function stripInvisibleControls(value: string): string {
+  return value.replace(
+    // U+200D（ZWJ）は残す。結合した絵文字（家族や職業の絵文字など）が分解されるため。
+    // 禁止語の照合では書式文字としてすべて落とすので、すり抜けには使えない。
+    // 制御文字を落とすのが目的なので、正規表現に制御文字を書く（すべて \u の書き方で）。
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g,
+    "",
+  );
+}
 
 export const emailSchema = trimmedString
   .pipe(
@@ -91,7 +111,29 @@ export function safeRedirectPath(
     return fallback;
   }
   if (resolved.origin !== base) return fallback;
-  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  const result = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+
+  /*
+   * ★解釈した後の形でも、もう一度確かめる。★（監査 SEC-09）
+   * «/.//evil.example» «/a/..//evil.example» は、解釈の途中で «.» «..» が消えて
+   * パスが «//evil.example» になる。同じオリジンに留まったように見えるが、それを
+   * Location に入れるとブラウザはスキーム相対の URL として外部へ飛ぶ。
+   * 出す文字列そのものが «/ で始まり // で始まらない・\ を含まない» こと、
+   * もう一度解釈しても同じ形になることを確かめる。
+   */
+  if (!result.startsWith("/") || result.startsWith("//") || result.includes("\\")) {
+    return fallback;
+  }
+  let again: URL;
+  try {
+    again = new URL(result, base);
+  } catch {
+    return fallback;
+  }
+  if (again.origin !== base || `${again.pathname}${again.search}${again.hash}` !== result) {
+    return fallback;
+  }
+  return result;
 }
 
 /**

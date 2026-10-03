@@ -2,7 +2,8 @@ import { eq, sql } from "drizzle-orm";
 import { RouterContextProvider } from "react-router";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { adminActions, auditLogs, listings, reports, sessions, users } from "~/db/schema/index.ts";
+import { adminActions, auditLogs, listings, payments, reports, sessions, users } from "~/db/schema/index.ts";
+import { LISTING_FEE_JPY } from "~/domain/pricing";
 import { ulid } from "~/domain/ulid";
 import { issueGateCookie } from "~/server/admin-gate.server";
 import { appContext, type AppContext } from "~/server/app-context";
@@ -934,5 +935,71 @@ describe("★通報に対応する★", () => {
 
     expect(result.message).toBeTruthy();
     expect(await db.select().from(adminActions)).toHaveLength(0);
+  });
+});
+
+describe("★いまの状態でできない操作は «できません» と返す（E-4-1）★", () => {
+  it("下書きを «公開に戻す» と、汎用エラーではなく状態の説明を返す", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "draft" });
+    const result = await callAction(listingAction, {
+      path: `/admin/listings/${listingId}`,
+      params: { listingId },
+      form: { intent: "restore", reason: "状態の説明の検査" },
+    });
+    expect(result.message).toBe("この投稿の状態では、その操作はできません。");
+  });
+});
+
+// ── 決済待ちの投稿の却下で、支払いリンクを失効させる（監査 ADM-15）────────
+
+describe("★管理者が決済待ちの投稿を却下すると、生きた支払いリンクを失効させる★", () => {
+  it("ルートの action から Stripe の /expire が呼ばれ、決済の記録が expired になる", async () => {
+    const listingId = await makeDraft(db, owner.id, { status: "payment_pending" });
+    const paymentId = ulid();
+    await db.insert(payments).values({
+      id: paymentId,
+      listingId,
+      userId: owner.id,
+      provider: "stripe",
+      checkoutSessionId: "cs_admin_reject_1",
+      amountJpy: LISTING_FEE_JPY,
+      currency: "jpy",
+      status: "created",
+    });
+
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.startsWith("https://api.stripe.com/")) {
+        calls.push(`${method} ${url.replace("https://api.stripe.com/v1", "")}`);
+        const status = url.endsWith("/expire") ? "expired" : "open";
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "cs_admin_reject_1", status, payment_status: "unpaid", url: null }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      // 通知メールなどは送らない（記録の検査には関係しない）
+      return Promise.resolve(new Response(JSON.stringify({ id: "x" }), { status: 200 }));
+    };
+    try {
+      await callAction(listingAction, {
+        path: `/admin/listings/${listingId}`,
+        params: { listingId },
+        form: { intent: "reject", reason: "規約に反するため却下" },
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    expect(calls).toContain("POST /checkout/sessions/cs_admin_reject_1/expire");
+    const [row] = await db.select({ status: payments.status }).from(payments).where(eq(payments.id, paymentId));
+    expect(row!.status).toBe("expired");
+    const [listing] = await db.select({ status: listings.status }).from(listings).where(eq(listings.id, listingId));
+    expect(listing!.status).toBe("rejected");
+    expect(await db.select().from(adminActions)).toHaveLength(1);
   });
 });

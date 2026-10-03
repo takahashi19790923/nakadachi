@@ -25,7 +25,7 @@ export default function SafetyGuide() {
   return (
     <LegalPage
       title="安全な取引のためのガイド"
-      lastUpdated="2026年8月13日"
+      lastUpdated="2026年10月3日"
       showTemplateNotice={false}
     >
       <p>
@@ -97,7 +97,7 @@ export default function SafetyGuide() {
       <ul>
         <li>
           <strong>できるだけサイト内のメッセージで進めてください。</strong>
-          記録が残り、通報の際に運営者が確認できます。
+          やり取りの記録がサイト内に残ります（掲載の終了から6か月で削除されます）。
         </li>
         <li>
           早い段階で外部のSNSやメッセージアプリへ誘導されたら、
