@@ -81,8 +81,19 @@ nonce は React コンテキスト（`app/nonce.ts`）で運んでいます。
 > `nakadachi_app_production`（DDL 無し。`.env` の `DATABASE_URL_APP_PRODUCTION`、Hyperdrive の接続先）。
 > スクリプトは作ったあとに「アプリロールで DDL が通らないこと」を実際に試して確かめます。
 > ★Supabase では PUBLIC からの CONNECT を剥がしません。★ Supabase 自身の内部ロールが
-> 同じ `postgres` データベースへ繋ぐため。このプロジェクトは nakadachi の本番専用なので、
-> 越境の相手が居ません。
+> 同じ `postgres` データベースへ繋ぐため。
+>
+> ★2026-10-03 から、同じ `postgres` データベースに別サービス kyodo-junin（«わたしだけかと思った»。
+> 招待者だけの試用・架空データ）が同居しています。★ 運営者の決定（Supabase の Pro は青色番頭だけ、
+> Free の2枠は埋まっている）。kyodo-junin の物は スキーマ `app`・`app_auth`・`app_private`・`kj_meta` と
+> ロール `kj_owner`（移行の持ち主。CREATEROLE・CREATEDB・BYPASSRLS なし・接続2本まで）・`kj_app`（Worker。接続5本まで）
+> だけで、なかだちの `public` には何も作りません。お互いのデータは権限で読めません
+> （表・関数の名前や本文は同じ DB なので見えます）。PUBLIC からの CONNECT は残したままなので、
+> kj_* の鍵が漏れると この DB に «接続» はできます（データには届かない）。なかだちの所有者 `postgres` は
+> kj_* の ADMIN を持ちます（PG16 以降、作ったロールに自動で付く）。
+> ★kj_* のロールと上の4つのスキーマを消さない・権限を変えない。★ Supabase のプロジェクトの削除・一時停止・
+> 作り直し・別の DB への移行・プラン変更の前に、kyodo-junin の片付け（`kyodo-junin/scripts/teardown-production.mjs`
+> → ロールの削除）を先に。決まりは 新サービス構築ルール.md の DB の節と `kyodo-junin/docs/operations.md`。
 >
 > 以下は Neon（dev / preview で今も使っている）での作り方です。
 

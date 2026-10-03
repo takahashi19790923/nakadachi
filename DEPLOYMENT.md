@@ -96,6 +96,12 @@ pnpm exec wrangler hyperdrive create nakadachi-production-tokyo --connection-str
 
 #### 切り戻し・後片づけ
 
+- ★同居（2026-10-03〜）★: この DB には別サービス kyodo-junin が同居している（スキーマ `app`・`app_auth`・
+  `app_private`・`kj_meta`、ロール `kj_owner`・`kj_app`。SECURITY.md「DB ロールの分離」）。Supabase のプロジェクトの
+  削除・一時停止・作り直し・別の DB への移行・プラン変更の前に、kyodo-junin の片付け
+  （`kyodo-junin/scripts/teardown-production.mjs` → ロールの削除）を先に。Free の上限（DB 500MB・接続数）も
+  kyodo-junin と分け合う。なかだちの R2 の控えと復元は public の決まった表だけなので、kyodo-junin の表は入らない
+  （入らないのが正しい）
 - **Neon へ戻す**: `wrangler.jsonc` の `env.production.hyperdrive[].id` を
   `bc7ebd4ecfdc4b70a4860fb2338418e2`（Neon 向け）に戻してデプロイ。★移行後の書き込みは戻らない★
 - **Hyperdrive を外す**: `hyperdrive` の項目を消すと `DATABASE_URL`（Workers の Secret ＝ Neon の
