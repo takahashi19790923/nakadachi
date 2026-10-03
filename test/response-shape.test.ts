@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppEnv } from "~/server/env.server";
-import { AppError, asRouteError, ConfigurationError, rateLimited } from "~/server/errors";
+import {
+  AppError,
+  asRouteError,
+  ConfigurationError,
+  rateLimited,
+  routeErrorMessage,
+} from "~/server/errors";
 import {
   applySecurityHeaders,
   isSharedCacheable,
@@ -80,18 +86,60 @@ describe("isSharedCacheable（Cookie を足してはいけない応答）", () =
     return isSharedCacheable(headers);
   }
 
-  it("public・s-maxage は共有キャッシュに置ける", () => {
+  it("public・s-maxage・private の無い max-age は共有キャッシュに置ける", () => {
     expect(cacheable("public, max-age=3600")).toBe(true);
     expect(cacheable("public, max-age=86400, stale-while-revalidate=604800")).toBe(true);
     expect(cacheable("max-age=60, s-maxage=600")).toBe(true);
     expect(cacheable("Public")).toBe(true);
+    // RFC 9111 §3: private が無ければ max-age だけでも共有キャッシュは保存できる。
+    expect(cacheable("max-age=60")).toBe(true);
   });
 
   it("private・no-store・指定なしは置けない", () => {
     expect(cacheable("private, no-store")).toBe(false);
+    expect(cacheable("private, max-age=60")).toBe(false);
     expect(cacheable("no-store")).toBe(false);
     expect(cacheable("public, no-store")).toBe(false);
     expect(cacheable(null)).toBe(false);
-    expect(cacheable("max-age=60")).toBe(false);
+    expect(cacheable("no-cache")).toBe(false);
+  });
+});
+
+describe("routeErrorMessage（エラーの画面に出す文言）", () => {
+  it("asRouteError が作った中身の文言は出す", () => {
+    expect(routeErrorMessage({ message: "画面を開き直してください" })).toBe(
+      "画面を開き直してください",
+    );
+  });
+
+  it("★React Router 自身のエラー（data が Error）は出さない★", () => {
+    // action の無い画面への POST（405）で React Router が入れる形。
+    const internal = new Error(
+      'You made a POST request to "/legal/terms" but did not provide an `action` for route "routes/legal.terms"',
+    );
+    expect(routeErrorMessage(internal)).toBeNull();
+  });
+
+  it("形が違うものは出さない", () => {
+    expect(routeErrorMessage("Not Found")).toBeNull();
+    expect(routeErrorMessage(null)).toBeNull();
+    expect(routeErrorMessage({ message: "" })).toBeNull();
+    expect(routeErrorMessage({ message: 1 })).toBeNull();
+  });
+});
+
+describe("asRouteError は記録を残す", () => {
+  it("logger を渡せば code と detail を warn で残す（detail は1行に）", () => {
+    const lines: { message: string; fields?: Record<string, string | number> }[] = [];
+    const logger = {
+      warn: (message: string, fields?: Record<string, string | number>) => {
+        lines.push({ message, fields });
+      },
+    };
+    const LF = String.fromCharCode(10);
+    asRouteError(new AppError("csrf_mismatch", "x", { detail: `origin mismatch${LF}forged` }), logger);
+    expect(lines).toEqual([
+      { message: "request rejected", fields: { code: "csrf_mismatch", detail: "origin mismatch forged" } },
+    ]);
   });
 });

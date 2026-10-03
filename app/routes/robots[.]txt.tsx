@@ -25,7 +25,14 @@ export function loader({ context: rawContext }: Route.LoaderArgs) {
   if (context.env.ENVIRONMENT !== "production") {
     return new Response(
       ["User-agent: *", "Disallow: /", ""].join("\n"),
-      { headers: { "content-type": "text/plain; charset=utf-8" } },
+      {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          // 本番と同じ扱い（中身は環境ごとに固定）。本番以外でも «共有キャッシュに
+          // 置く応答には Cookie を足さない» が E2E で確かめられるようにする。
+          "cache-control": "public, max-age=3600",
+        },
+      },
     );
   }
 

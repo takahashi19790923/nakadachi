@@ -132,7 +132,8 @@ export function applySecurityHeaders(
 export function isSharedCacheable(headers: Headers): boolean {
   const cacheControl = (headers.get("cache-control") ?? "").toLowerCase();
   if (/(^|[\s,])(private|no-store)([\s,=]|$)/.test(cacheControl)) return false;
-  return /(^|[\s,])(public|s-maxage)([\s,=]|$)/.test(cacheControl);
+  // public・s-maxage に加え、private の無い max-age も共有キャッシュは保存できる（RFC 9111 §3）。
+  return /(^|[\s,])(public|s-maxage|max-age)([\s,=]|$)/.test(cacheControl);
 }
 
 /** 1リクエストにつき1つ。推測できないことが CSP の前提 */

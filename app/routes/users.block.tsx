@@ -36,7 +36,7 @@ export async function action({ request, context: rawContext, params }: Route.Act
     });
   } catch (error) {
     // CSRF の照合に落ちた・自分自身を指定した、を 500 にしない（asRouteError の説明）。
-    throw asRouteError(error);
+    throw asRouteError(error, context.logger);
   }
 
   return redirect(safeRedirectPath(formData.get("next"), "/mypage/messages"));

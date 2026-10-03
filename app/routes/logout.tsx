@@ -26,7 +26,7 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
     await assertCsrf(request, context.env, await request.formData());
   } catch (error) {
     // 古いタブからのログアウトなどで照合に落ちたときに 500 にしない（asRouteError の説明）。
-    throw asRouteError(error);
+    throw asRouteError(error, context.logger);
   }
 
   /*

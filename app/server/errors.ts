@@ -198,11 +198,38 @@ export interface RouteErrorData {
  * 使い方: try/catch で受けずに外へ出していた loader・action を
  * `try { … } catch (error) { throw asRouteError(error); }` で包む。
  */
-export function asRouteError(error: unknown): unknown {
+export function asRouteError(
+  error: unknown,
+  /**
+   * 渡せば、包む AppError の code と detail を warn で残す。
+   * ★ルートのエラー応答は React Router の handleError を通らない。★ 包むだけだと、
+   * CSRF の照合失敗（攻撃の兆候になりうる）が一切記録されなくなる。
+   */
+  logger?: { warn(message: string, fields?: Record<string, string | number>): void },
+): unknown {
   if (error instanceof Response) return error;
   if (isAppError(error)) {
+    logger?.warn("request rejected", {
+      code: error.code,
+      ...(error.detail ? { detail: sanitizeForLog(error.detail) } : {}),
+    });
     const body: RouteErrorData = { message: error.message };
     return data(body, { status: error.status });
   }
   return error;
+}
+
+/**
+ * ルートのエラー応答の中身から、画面に出す文言だけを取り出す（形が違えば null）。
+ *
+ * ★Error は採らない。★ React Router 自身が作るエラー応答（action の無い画面への
+ * POST の 405 など）は data に Error を入れ、その message は «You made a POST request
+ * to … route "routes/…"» のような内部の英文になる。本番でも Error の置き換えは
+ * data の中までは及ばないので、採ると画面にそのまま出る。asRouteError が作るのは
+ * 素のオブジェクトだけ。
+ */
+export function routeErrorMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || value instanceof Error) return null;
+  const message = (value as Partial<RouteErrorData>).message;
+  return typeof message === "string" && message.length > 0 ? message : null;
 }

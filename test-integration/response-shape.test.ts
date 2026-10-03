@@ -1,6 +1,8 @@
+import { eq } from "drizzle-orm";
 import { RouterContextProvider } from "react-router";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import { listingImages, sessions } from "~/db/schema/index.ts";
 import { appContext, type AppContext } from "~/server/app-context";
 import { csrfCookieName, issueCsrfToken } from "~/server/csrf.server";
 import type { Db } from "~/server/db.server";
@@ -11,6 +13,7 @@ import { closeTestDb, makeDraft, makeUser, resetDatabase, testEnv, testLogger } 
 import { loader as rawContactLoader } from "~/routes/listings.contact";
 import { action as rawFavoriteAction } from "~/routes/listings.favorite";
 import { action as rawLogoutAction } from "~/routes/logout";
+import { loader as rawMediaLoader } from "~/routes/media";
 import { action as rawBlockAction } from "~/routes/users.block";
 
 /**
@@ -32,6 +35,7 @@ const favoriteAction = rawFavoriteAction as unknown as RouteFn;
 const blockAction = rawBlockAction as unknown as RouteFn;
 const logoutAction = rawLogoutAction as unknown as RouteFn;
 const contactLoader = rawContactLoader as unknown as RouteFn;
+const mediaLoader = rawMediaLoader as unknown as RouteFn;
 
 let db: Db;
 const env = testEnv();
@@ -191,5 +195,87 @@ describe("★会話の開始: 回数制限に当たっても 500 にしない★
     }
     const over = (await open()) as { message: string };
     expect(over.message).toContain("操作が続けて行われました");
+  });
+});
+
+describe("★写真の配信ではログインの期限を延ばさない★", () => {
+  /*
+   * 公開中の写真は共有キャッシュに置く応答なので、Worker は Set-Cookie を足さない。
+   * ここで延長を走らせると «DB だけ延びて Cookie は古いまま» になり、次の画面でも
+   * 延ばされず、Cookie の期限で先にログアウトしていた（PR-D のレビューで発覚）。
+   */
+  it("延長の閾値を切ったセッションで公開中の写真を開いても、DB の期限は変わらない", async () => {
+    const owner = await makeUser(db, "owner@example.test");
+    const viewer = await makeUser(db, "viewer@example.test");
+    const listingId = await makeDraft(db, owner.id, {
+      status: "published",
+      publishedAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 86_400_000),
+    });
+    const objectKey = `listings/${listingId}/01JQZZZZZZZZZZZZZZZZZZZZZZ`;
+    await db.insert(listingImages).values({
+      id: "01JQZZZZZZZZZZZZZZZZZZZZZZ",
+      listingId,
+      objectKey,
+      contentType: "image/png",
+      byteSize: 4,
+      width: 100,
+      height: 100,
+      checksumSha256: "0".repeat(64),
+    });
+
+    const cookies = await signIn(viewer.id);
+    // 残りを10日にする（30日の半分を切っているので、画面なら延長される）。
+    const tenDays = new Date(Date.now() + 10 * 86_400_000);
+    await db.update(sessions).set({ expiresAt: tenDays }).where(eq(sessions.userId, viewer.id));
+
+    const deferred: Promise<unknown>[] = [];
+    const setCookies: string[] = [];
+    const context = new RouterContextProvider();
+    const media = {
+      get: () =>
+        Promise.resolve({
+          body: new Uint8Array([1, 2, 3, 4]),
+          size: 4,
+          httpEtag: '"etag"',
+        }),
+    } as unknown as R2Bucket;
+    const app: AppContext = {
+      env: { ...env, MEDIA: media },
+      ctx: {} as ExecutionContext,
+      defer: (promise) => deferred.push(promise),
+      getDb: () => db,
+      logger: testLogger,
+      nonce: "test-nonce",
+      requestId: "test-request",
+      setCookie: (value) => setCookies.push(value),
+      csrfToken: "",
+    };
+    context.set(appContext, app);
+
+    const response = (await mediaLoader({
+      request: new Request(new URL(`/media/${objectKey}`, env.APP_ORIGIN), {
+        headers: { cookie: cookies },
+      }),
+      context,
+      params: { objectKey },
+    })) as Response;
+    await response.arrayBuffer();
+    /*
+     * ★閲覧者の照会は裏で走る。★ 公開中の写真では待たれずに応答が先に返るので、
+     * すぐに見ると、延長（defer への登録と Set-Cookie）がまだ起きていないだけで緑になる。
+     * 裏の照会が済むだけの時間を置いてから、預かった処理を片付けて見る。
+     */
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await Promise.allSettled(deferred);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("public");
+    expect(setCookies).toEqual([]);
+    const rows = await db
+      .select({ expiresAt: sessions.expiresAt })
+      .from(sessions)
+      .where(eq(sessions.userId, viewer.id));
+    expect(rows[0]!.expiresAt.getTime()).toBe(tenDays.getTime());
   });
 });

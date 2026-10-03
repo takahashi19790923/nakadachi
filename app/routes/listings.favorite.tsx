@@ -37,7 +37,7 @@ export async function action({ request, context: rawContext, params }: Route.Act
     });
   } catch (error) {
     // CSRF の照合に落ちた（古いタブなど）ときに 500 にしない（asRouteError の説明）。
-    throw asRouteError(error);
+    throw asRouteError(error, context.logger);
   }
 
   // 元の画面へ戻す。戻り先はパスだけを受け付ける（オープンリダイレクト対策）。

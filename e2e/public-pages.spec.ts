@@ -387,8 +387,30 @@ test.describe("応答の形（本番ビルド）", () => {
     expect(body).not.toContain("Unexpected Server Error");
   });
 
+  test("★受け口の無い画面への POST は 405 で、内部の英文を出さない★", async ({ request, baseURL }) => {
+    // React Router 自身のエラー応答は data に Error を入れる。その message には
+    // ルートの名前入りの英文が入るので、エラーの画面に出してはいけない。
+    const response = await request.post("/legal/terms", {
+      headers: { origin: new URL(baseURL!).origin },
+      form: { x: "1" },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
+    expect(response.status()).toBe(405);
+    const body = await response.text();
+    /*
+     * ★画面に出る部分（<main>）だけを見る。★ React Router はこの英文を、ハイドレーション用の
+     * データ（ErrorResponse の data。文字列）には本番でも入れる。ルートの名前は経路の一覧で
+     * もともと公開されているので受容（監査 HDR-05）。画面の文言に出さないことを守る。
+     */
+    const main = /<main[\s\S]*?<\/main>/.exec(body)?.[0] ?? "";
+    expect(main).toContain("Method Not Allowed");
+    expect(main).not.toContain("did not provide");
+  });
+
   test("★共有キャッシュに置く応答には Cookie を付けない★", async ({ request }) => {
-    for (const path of ["/robots.txt", "/sitemap.xml"]) {
+    // sitemap.xml も public だが DB を引くので、DB の無い環境でも返る robots.txt で見る。
+    for (const path of ["/robots.txt"]) {
       const response = await request.get(path, { failOnStatusCode: false });
       expect(response.headers()["cache-control"], path).toContain("public");
       const cookies = response

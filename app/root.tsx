@@ -18,7 +18,7 @@ import { SiteHeader } from "./components/site-header";
 import { SITE } from "./config/site";
 import { loadUser } from "./server/guards.server";
 import { getApp } from "~/server/app-context";
-import { isAppError, type RouteErrorData } from "~/server/errors";
+import { isAppError, routeErrorMessage } from "~/server/errors";
 /**
  * 全画面で必要な値をここで1回だけ用意する。
  *
@@ -104,13 +104,6 @@ export default function App() {
  * エラー画面。
  * ★スタックトレースを本番で出さない。★ 内部のファイル構成と依存が漏れる。
  */
-/** ルートのエラー応答の中身から、画面に出す文言だけを取り出す（形が違えば null） */
-function routeErrorMessage(data: unknown): string | null {
-  if (typeof data !== "object" || data === null) return null;
-  const message = (data as Partial<RouteErrorData>).message;
-  return typeof message === "string" && message.length > 0 ? message : null;
-}
-
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let title = "問題が発生しました";
   let description =
