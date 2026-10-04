@@ -116,15 +116,23 @@ export function listingPublishedEmail(options: {
   title: string;
   listingUrl: string;
   expiresAt: string;
+  /**
+   * お仕事か。★求人の掲載者には «募集が終わったり変わったりしたら、すぐに終了・編集を» と
+   * 依頼する。★（職業安定法施行規則4条の3第4項3号ロ(1)。監査 JOB-05）
+   */
+  isJob?: boolean;
 }): EmailContent {
+  const jobRequest =
+    "求人の内容が変わったときや、募集が終わったときは、すぐにマイページから掲載を編集・終了してください（求人の情報を正確で最新に保つためのお願いです）。";
   const { html, text } = layout({
     heading: "投稿を公開しました",
     bodyHtml: `
       <p style="margin:0 0 12px">掲載料 ${formatJpy(LISTING_FEE_JPY)}（税込）のお支払いを確認し、投稿を公開しました。</p>
       <p style="margin:0 0 12px"><strong>${escapeHtml(options.title)}</strong></p>
       <p style="margin:0 0 12px">掲載終了予定日：${escapeHtml(options.expiresAt)}</p>
+      ${options.isJob ? `<p style="margin:0 0 12px"><strong>${escapeHtml(jobRequest)}</strong></p>` : ""}
       <p style="margin:0;font-size:13px;color:#6d6759">
-        取引が決まったら、マイページから掲載を終了できます。<br>
+        ${options.isJob ? "採用が決まったら" : "取引が決まったら"}、マイページから掲載を終了できます。<br>
         正確な住所や電話番号は投稿に書かないでください。
       </p>`,
     bodyText: [
@@ -133,7 +141,8 @@ export function listingPublishedEmail(options: {
       options.title,
       `掲載終了予定日：${options.expiresAt}`,
       "",
-      "取引が決まったら、マイページから掲載を終了できます。",
+      ...(options.isJob ? [jobRequest, ""] : []),
+      `${options.isJob ? "採用が決まったら" : "取引が決まったら"}、マイページから掲載を終了できます。`,
     ].join("\n"),
     actionUrl: options.listingUrl,
     actionLabel: "投稿を見る",

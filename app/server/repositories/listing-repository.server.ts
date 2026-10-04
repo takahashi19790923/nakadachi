@@ -337,6 +337,8 @@ async function loadDetail(
       qualifications: listingCategoryDetails.qualifications,
       benefits: listingCategoryDetails.benefits,
       companyName: listingCategoryDetails.companyName,
+      applyUrl: listingCategoryDetails.applyUrl,
+      applyEmail: listingCategoryDetails.applyEmail,
     })
     .from(listings)
     .innerJoin(categories, eq(categories.id, listings.categoryId))
@@ -411,6 +413,8 @@ async function loadDetail(
       qualifications: row.qualifications,
       benefits: row.benefits,
       companyName: row.companyName,
+      applyUrl: row.applyUrl,
+      applyEmail: row.applyEmail,
     },
   };
 }

@@ -71,6 +71,13 @@
       "when": 1790894952522,
       "tag": "0009_purge_auth_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791079654351,
+      "tag": "0010_job_apply_contact",
+      "breakpoints": true
     }
   ]
 }

@@ -52,10 +52,15 @@ export function formatListingPrice(input: {
 
   if (input.categorySlug === "job") {
     const unit = SALARY_UNIT_LABEL[input.priceUnit] ?? "";
+    /*
+     * ★上限が無い（または下限と同じ）ときは «〜» を付けない。★（監査 JOB-10）
+     * 以前は «時給 1,100円〜» と出していて、掲載者が書いていない «それ以上もある» を
+     * 運営者の描画が足していた（実際より高い賃金があるかのような表示。職業安定法5条の4第1項）。
+     */
     const range =
       typeof input.salaryMaxJpy === "number" && input.salaryMaxJpy > input.priceJpy
         ? `${formatJpy(input.priceJpy)}〜${formatJpy(input.salaryMaxJpy)}`
-        : `${formatJpy(input.priceJpy)}〜`;
+        : formatJpy(input.priceJpy);
     return unit ? `${unit} ${range}` : range;
   }
 

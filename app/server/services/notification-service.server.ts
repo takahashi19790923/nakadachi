@@ -1,6 +1,7 @@
 import { and, eq, isNull, lte, sql } from "drizzle-orm";
 
 import {
+  categories,
   conversationThreads,
   listings,
   userProfiles,
@@ -66,8 +67,9 @@ export async function notifyListingPublished(options: {
   const { db, env, logger, listingId, userId } = options;
 
   const rows = await db
-    .select({ title: listings.title, expiresAt: listings.expiresAt })
+    .select({ title: listings.title, expiresAt: listings.expiresAt, categorySlug: categories.slug })
     .from(listings)
+    .innerJoin(categories, eq(categories.id, listings.categoryId))
     .where(eq(listings.id, listingId))
     .limit(1);
   const listing = rows[0];
@@ -89,6 +91,7 @@ export async function notifyListingPublished(options: {
               timeZone: "Asia/Tokyo",
             }).format(listing.expiresAt)
           : "未定",
+        isJob: listing.categorySlug === "job",
       }),
       // ★掲載1件につき1通。★ Webhook が再送されても増えない。
       idempotencyKey: `listing_published:${listingId}`,

@@ -60,6 +60,10 @@ export interface ListingCategoryDetailView {
   readonly qualifications: string | null;
   readonly benefits: string | null;
   readonly companyName: string | null;
+  /** 応募ページ（お仕事。https だけ） */
+  readonly applyUrl: string | null;
+  /** 応募のメールアドレス（お仕事） */
+  readonly applyEmail: string | null;
 }
 
 export interface ListingDetail extends ListingSummary {

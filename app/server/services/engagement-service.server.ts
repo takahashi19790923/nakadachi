@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
-import { blocks, favorites, listings } from "~/db/schema/index.ts";
+import { blocks, categories, favorites, listings } from "~/db/schema/index.ts";
+import { isCategorySlug, usesDirectInquiry } from "~/domain/categories";
 import type { ListingStatus } from "~/domain/listing-status";
 import type { ListingSummary } from "~/domain/listing-types";
 import type { Db } from "../db.server.ts";
@@ -34,8 +35,9 @@ export async function toggleFavorite(options: {
 
   // 公開中の投稿だけをお気に入りにできる。下書きの ID を送られても増えない。
   const exists = await db
-    .select({ id: listings.id })
+    .select({ id: listings.id, categorySlug: categories.slug })
     .from(listings)
+    .innerJoin(categories, eq(categories.id, listings.categoryId))
     .where(
       and(
         eq(listings.id, listingId),
@@ -47,6 +49,18 @@ export async function toggleFavorite(options: {
 
   if (exists.length === 0) {
     throw notFound(`favorite target not available: ${listingId}`);
+  }
+
+  /*
+   * ★お仕事はお気に入りにさせない。★ 誰がどの求人に関心を持ったかを、このサイトに
+   * 残さない（求職者の情報を集めない作り）。外すほうは上で先に済ませてあるので、
+   * 以前に入れたものは外せる。
+   */
+  const slug = exists[0]!.categorySlug;
+  if (!isCategorySlug(slug) || usesDirectInquiry(slug)) {
+    throw new AppError("conflict", "お仕事はお気に入りに追加できません。", {
+      detail: `favorite refused for direct-inquiry category: ${slug}`,
+    });
   }
 
   await db

@@ -128,14 +128,15 @@ export function ListingForm({
 
         <TextField
           name="priceJpy"
-          label={`${category.priceLabel}（円・税込）`}
+          // ★給与に «税込» は付けない。★ 額面と手取りの取り違えのもとになる（監査 JOB-11）。
+          label={categorySlug === "job" ? `${category.priceLabel}（円）` : `${category.priceLabel}（円・税込）`}
           inputMode="numeric"
           maxLength={10}
           defaultValue={listing?.priceJpy ?? ""}
           error={errors?.priceJpy}
           hint={
             categorySlug === "job"
-              ? "給与の下限を入力してください。"
+              ? "給与の下限を、額面（税金や社会保険料を引く前）で入力してください。"
               : "「無料」「相談」を選んだ場合は空欄で構いません。"
           }
         />
@@ -143,12 +144,12 @@ export function ListingForm({
         {categorySlug === "job" ? (
           <TextField
             name="salaryMaxJpy"
-            label="給与の上限（円・税込）"
+            label="給与の上限（円）"
             inputMode="numeric"
             maxLength={10}
             defaultValue={details?.salaryMaxJpy ?? ""}
             error={errors?.salaryMaxJpy}
-            hint="幅がない場合は空欄で構いません。"
+            hint="幅がない場合は空欄で構いません（空欄なら下限の額だけを表示します）。"
           />
         ) : null}
 
@@ -311,6 +312,38 @@ export function ListingForm({
               defaultValue={details?.benefits ?? ""}
               error={errors?.benefits}
             />
+            {/*
+              ★応募は掲載者の外部の窓口へ直接。★ なかだちは応募を取り次がず、応募した人の情報を
+              受け取らない。どちらか1つ以上が必須（検証は domain/validation/listing.ts）。
+            */}
+            <fieldset className="space-y-3 rounded-lg border border-washi-200 p-4">
+              <legend className="px-1 text-sm font-semibold text-washi-800">
+                応募の連絡先（どちらか1つ以上・公開されます）
+              </legend>
+              <p className="text-sm text-washi-600">
+                応募する方は、ここに書いた応募ページかメールアドレスへ直接応募します。なかだちのサイト内の
+                メッセージやお気に入りは、お仕事では使えません。
+              </p>
+              <TextField
+                name="applyUrl"
+                label="応募ページの URL"
+                maxLength={500}
+                defaultValue={details?.applyUrl ?? ""}
+                error={errors?.applyUrl}
+                hint="https:// で始まる、応募を受け付けるページ（自社の採用ページ・求人サイトの掲載ページなど）。"
+              />
+              <TextField
+                name="applyEmail"
+                label="応募のメールアドレス"
+                inputMode="email"
+                // 掲載者本人の個人のアドレスを候補に出さない（公開される欄なので、採用用のアドレスを書いてもらう）。
+                autoComplete="off"
+                maxLength={254}
+                defaultValue={details?.applyEmail ?? ""}
+                error={errors?.applyEmail}
+                hint="誰でも見られる場所に表示されます。採用用のアドレスをおすすめします。"
+              />
+            </fieldset>
           </>
         ) : null}
 
