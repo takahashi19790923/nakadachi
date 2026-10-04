@@ -16,6 +16,7 @@ import { createLogger } from "~/server/logger.server.ts";
 import {
   applySecurityHeaders,
   generateNonce,
+  isSharedCacheable,
 } from "~/server/security-headers.server.ts";
 
 const requestHandler = createRequestHandler(
@@ -124,7 +125,12 @@ export default {
       // 監視用。認証不要・副作用なし・軽い。React Router を通さずに答える。
       const url = new URL(request.url);
       if (url.pathname === "/api/health") {
-        return await handleHealthCheck({ env, getDb, logger });
+        // ★監視の口にも他と同じヘッダを付ける。★（監査 HDR-01）Cookie は足さない。
+        return applySecurityHeaders(
+          await handleHealthCheck({ env, getDb, logger }),
+          env,
+          nonce,
+        );
       }
 
       // React Router 8 では context が RouterContextProvider になった。
@@ -145,10 +151,17 @@ export default {
       const response = await requestHandler(request, routerContext);
 
       const secured = applySecurityHeaders(response, env, nonce);
-      if (csrfSetCookie) secured.headers.append("set-cookie", csrfSetCookie);
-      // セッションの期限延長など、処理の途中で足された Cookie。
-      for (const cookie of extraCookies) {
-        secured.headers.append("set-cookie", cookie);
+      /*
+       * ★共有キャッシュに置いてよい応答には Cookie を足さない。★（監査 HDR-02）
+       * robots.txt や sitemap.xml にまで CSRF の Cookie を付けていた。
+       * CSRF の Cookie は画面（HTML・.data）で配れば足りる。
+       */
+      if (!isSharedCacheable(secured.headers)) {
+        if (csrfSetCookie) secured.headers.append("set-cookie", csrfSetCookie);
+        // セッションの期限延長など、処理の途中で足された Cookie。
+        for (const cookie of extraCookies) {
+          secured.headers.append("set-cookie", cookie);
+        }
       }
       return secured;
     } catch (error) {

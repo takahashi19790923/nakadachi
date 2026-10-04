@@ -364,3 +364,89 @@ test.describe("見つからないときの応答", () => {
     }
   });
 });
+
+/**
+ * ★応答の形は «本番のビルド» でしか確かめられない。★（監査 AUTH-08・HDR-01〜06）
+ *
+ * React Router は本番のときだけ、Response 以外の例外を «Unexpected Server Error»・500 に
+ * 置き換える。開発サーバーと統合検査では置き換えないので、そこが緑でも本番は 500 だった。
+ * E2E は本番ビルド（vite preview）に当てるので、ここで実際の状態コードを見る。
+ */
+test.describe("応答の形（本番ビルド）", () => {
+  test("★照合に落ちた POST は 403 で、500 にならない★", async ({ request, baseURL }) => {
+    // CSRF のトークンを付けずにログアウトを送る。状態は何も変わらない。
+    const response = await request.post("/logout", {
+      headers: { origin: new URL(baseURL!).origin },
+      form: { intent: "logout" },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
+    expect(response.status()).toBe(403);
+    const body = await response.text();
+    expect(body).toContain("セッションの確認に失敗しました");
+    expect(body).not.toContain("Unexpected Server Error");
+  });
+
+  test("★受け口の無い画面への POST は 405 で、内部の英文を出さない★", async ({ request, baseURL }) => {
+    // React Router 自身のエラー応答は data に Error を入れる。その message には
+    // ルートの名前入りの英文が入るので、エラーの画面に出してはいけない。
+    const response = await request.post("/legal/terms", {
+      headers: { origin: new URL(baseURL!).origin },
+      form: { x: "1" },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
+    expect(response.status()).toBe(405);
+    const body = await response.text();
+    /*
+     * ★画面に出る部分（<main>）だけを見る。★ React Router はこの英文を、ハイドレーション用の
+     * データ（ErrorResponse の data。文字列）には本番でも入れる。ルートの名前は経路の一覧で
+     * もともと公開されているので受容（監査 HDR-05）。画面の文言に出さないことを守る。
+     */
+    const main = /<main[\s\S]*?<\/main>/.exec(body)?.[0] ?? "";
+    expect(main).toContain("この操作は受け付けていません");
+    expect(main).not.toContain("did not provide");
+  });
+
+  test("★共有キャッシュに置く応答には Cookie を付けない★", async ({ request }) => {
+    // sitemap.xml は DB を引くので、DB のある環境だけで見る（無ければ飛ばしたことを出す）。
+    const health = await request.get("/api/health", { failOnStatusCode: false });
+    const hasDb =
+      health.ok() && ((await health.json()) as { db?: boolean }).db === true;
+    if (!hasDb) {
+      console.warn("[E2E] データベースが無いため、sitemap.xml の Cookie の検査を飛ばします。");
+    }
+    for (const path of hasDb ? ["/robots.txt", "/sitemap.xml"] : ["/robots.txt"]) {
+      const response = await request.get(path, { failOnStatusCode: false });
+      expect(response.headers()["cache-control"], path).toContain("public");
+      const cookies = response
+        .headersArray()
+        .filter((header) => header.name.toLowerCase() === "set-cookie");
+      expect(cookies, path).toEqual([]);
+    }
+  });
+
+  test("Cache-Control を決めていない応答は private, no-store", async ({ request }) => {
+    // ログインへの転送（Set-Cookie が付く）
+    const redirect = await request.get("/mypage", { maxRedirects: 0, failOnStatusCode: false });
+    expect(redirect.status()).toBeGreaterThanOrEqual(300);
+    expect(redirect.status()).toBeLessThan(400);
+    expect(redirect.headers()["cache-control"]).toBe("private, no-store");
+
+    // 画面遷移で読む中身（.data）
+    const data = await request.get("/legal/terms.data", { failOnStatusCode: false });
+    expect(data.headers()["cache-control"]).toBe("private, no-store");
+  });
+
+  test("監視の口にもセキュリティヘッダが付く", async ({ request }) => {
+    const response = await request.get("/api/health", { failOnStatusCode: false });
+    expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers()["x-frame-options"]).toBe("DENY");
+    expect(response.headers()["cache-control"]).toBe("no-store");
+  });
+
+  test("エラーの画面にも題名がある", async ({ page }) => {
+    await page.goto("/this-path-does-not-exist");
+    await expect(page).toHaveTitle(/ページが見つかりません/);
+  });
+});

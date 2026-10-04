@@ -1,5 +1,5 @@
-import { loadUser } from "~/server/guards.server";
 import { notFound } from "~/server/errors";
+import { getSessionUser, NO_SESSION_RENEWAL } from "~/server/session.server";
 import { resolveMediaAccess } from "~/server/services/media/media-service.server";
 import type { Route } from "./+types/media";
 import { getApp } from "~/server/app-context";
@@ -26,7 +26,18 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   const access = await resolveMediaAccess({
     db: context.getDb(),
     objectKey,
-    viewer: loadUser({ request, context })
+    /*
+     * ★写真の配信ではログインの期限を延ばさない。★（監査 PR-D のレビュー）
+     * 公開中の写真は共有キャッシュに置く応答なので、Worker は Set-Cookie を足さない
+     * （workers/app.ts）。延長を走らせると «DB だけ延びて Cookie は古いまま» になり、
+     * 次の画面でも延ばされず、Cookie の期限で先にログアウトする。延長は画面の応答に任せる。
+     */
+    viewer: getSessionUser({
+      getDb: context.getDb,
+      env: context.env,
+      request,
+      renew: NO_SESSION_RENEWAL,
+    })
       .then((viewer) => (viewer ? { id: viewer.id, role: viewer.role } : null))
       // 公開中の写真では待たれずに捨てられる。DB が落ちていても未処理の
       // 拒否を残さない。下書きの写真なら「未ログイン」として 404（fail-close）。
