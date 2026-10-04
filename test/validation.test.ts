@@ -220,6 +220,7 @@ describe("投稿の入力検証", () => {
         priceUnit: "hour",
         workHours: "9:00〜17:00",
         companyName: "なかだち商店",
+        applyEmail: "jobs@example.test",
       }),
     );
     expect(complete.success).toBe(true);
@@ -236,6 +237,7 @@ describe("投稿の入力検証", () => {
         priceUnit: "year",
         workHours: "9:00〜18:00",
         companyName: "なかだち商店",
+        applyEmail: "jobs@example.test",
       }),
     );
     expect(result.success).toBe(false);
@@ -427,5 +429,95 @@ describe("★検証エラーの文言に英語を出さない★", () => {
       (i) => i.path[0] === "durationDays",
     )?.message;
     expect(message).toBe("掲載期間の指定が不正です");
+  });
+});
+
+describe("★お仕事の応募の連絡先★", () => {
+  /*
+   * 応募は掲載者の外部の窓口（応募ページかメール）へ直接。このサイトは求職者の情報を
+   * 受け取らない作りなので、連絡先が無い求人は掲載できない。
+   */
+  function job(contact: Record<string, string>) {
+    return listingInputSchema.safeParse(
+      baseInput({
+        categorySlug: "job",
+        kind: "part_time",
+        priceType: "fixed",
+        priceJpy: "1200",
+        priceUnit: "hour",
+        workHours: "9:00〜17:00",
+        companyName: "なかだち商店",
+        ...contact,
+      }),
+    );
+  }
+
+  function firstIssue(result: ReturnType<typeof job>, field: string): string | undefined {
+    return result.success ? undefined : result.error.issues.find((i) => i.path[0] === field)?.message;
+  }
+
+  it("どちらも無ければ落とす", () => {
+    const result = job({});
+    expect(result.success).toBe(false);
+    expect(firstIssue(result, "applyUrl")).toContain("1つ以上");
+  });
+
+  it("https の応募ページなら通る（正規化される）", () => {
+    const result = job({ applyUrl: "https://Example.com/recruit" });
+    expect(result.success).toBe(true);
+    if (result.success && result.data.categorySlug === "job") {
+      expect(result.data.applyUrl).toBe("https://example.com/recruit");
+      expect(result.data.applyEmail).toBeNull();
+    }
+  });
+
+  it("メールアドレスだけでも通る（小文字にそろえる）", () => {
+    const result = job({ applyEmail: "Jobs@Example.COM" });
+    expect(result.success).toBe(true);
+    if (result.success && result.data.categorySlug === "job") {
+      expect(result.data.applyEmail).toBe("jobs@example.com");
+      expect(result.data.applyUrl).toBeNull();
+    }
+  });
+
+  it("★https 以外の URL・資格情報入りの URL・外部でない宛先は落とす★", () => {
+    for (const applyUrl of [
+      "http://example.com/recruit",
+      "javascript:alert(1)",
+      "data:text/html,<p>x</p>",
+      "https://user:secret@example.com/recruit",
+      "https://localhost/recruit",
+      "example.com/recruit",
+    ]) {
+      const result = job({ applyUrl });
+      expect(result.success, applyUrl).toBe(false);
+      expect(firstIssue(result, "applyUrl"), applyUrl).toContain("https://");
+    }
+  });
+
+  it("形の崩れたメールアドレスは落とす", () => {
+    const result = job({ applyEmail: "not-an-email" });
+    expect(result.success).toBe(false);
+    expect(firstIssue(result, "applyEmail")).toContain("メールアドレス");
+  });
+
+  it("★mailto の欄を足したアドレスは落とす★（画面に出ていない宛先・本文が入るため）", () => {
+    for (const applyEmail of [
+      "jobs@example.com?bcc=x%40other.example",
+      "jobs@example.com?body=hello",
+      "jobs@example.com&cc=x@other.example",
+      "jobs@example.com#x",
+      "jo/bs@example.com",
+    ]) {
+      const result = job({ applyEmail });
+      expect(result.success, applyEmail).toBe(false);
+    }
+  });
+
+  it("長すぎる URL は «長すぎます» と出す（符号化で伸びる日本語を含む）", () => {
+    const longPath = "あ".repeat(170);
+    const result = job({ applyUrl: `https://example.com/${longPath}` });
+    expect(result.success).toBe(false);
+    expect(firstIssue(result, "applyUrl")).toContain("長すぎます");
   });
 });

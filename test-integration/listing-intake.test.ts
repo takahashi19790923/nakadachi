@@ -1,5 +1,16 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/*
+ * ★受付を止める仕組みは残してある。★ お仕事は 2026-10 に受付を再開したので、この検査では
+ * お仕事を «止めた» 形にして、仕組みが3か所で効くことを確かめ続ける（どのカテゴリでも
+ * 同じ関数を通る）。
+ */
+vi.mock("~/domain/categories", async (importOriginal) => {
+  const actual = await importOriginal<typeof Categories>();
+  return { ...actual, isCategoryAcceptingNew: (slug: string) => slug !== "job" };
+});
+
+import type * as Categories from "~/domain/categories";
 import { categoryIntakePausedMessage } from "~/domain/categories";
 import { listingInputSchema } from "~/domain/validation/listing";
 import type { Db } from "~/server/db.server";
@@ -17,7 +28,7 @@ import {
 } from "./helpers.ts";
 
 /**
- * 受付を止めたカテゴリ（お仕事）。
+ * 受付を止めたカテゴリ（この検査ではお仕事を止めた形にしている。上の vi.mock）。
  *
  * ★画面で選べなくするだけでは足りない。★ 送信を書き換えれば作れてしまう。
  * 下書きの作成・下書きの編集・決済の開始の3か所で、サーバー側が止めること。
@@ -38,6 +49,7 @@ const jobForm = {
   priceUnit: "hour",
   workHours: "9:00〜17:00",
   companyName: "なかだち商店",
+  applyEmail: "jobs@example.test",
   prefectureCode: "13",
   cityCode: "13107",
   durationDays: "30",

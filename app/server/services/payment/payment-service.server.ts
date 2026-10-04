@@ -1,7 +1,13 @@
 import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 
-import { categories, listings, payments, paymentWebhookEvents } from "~/db/schema/index.ts";
-import { isCategorySlug } from "~/domain/categories";
+import {
+  categories,
+  listingCategoryDetails,
+  listings,
+  payments,
+  paymentWebhookEvents,
+} from "~/db/schema/index.ts";
+import { isCategorySlug, usesDirectInquiry } from "~/domain/categories";
 import {
   isValidListingFeePayment,
   LISTING_FEE_CURRENCY,
@@ -92,9 +98,12 @@ export async function startListingCheckout(options: {
       title: listings.title,
       durationDays: listings.durationDays,
       categorySlug: categories.slug,
+      applyUrl: listingCategoryDetails.applyUrl,
+      applyEmail: listingCategoryDetails.applyEmail,
     })
     .from(listings)
     .innerJoin(categories, eq(categories.id, listings.categoryId))
+    .leftJoin(listingCategoryDetails, eq(listingCategoryDetails.listingId, listings.id))
     .where(eq(listings.id, listingId))
     .limit(1);
 
@@ -136,6 +145,18 @@ export async function startListingCheckout(options: {
     });
   }
   assertCategoryAcceptingNew(listing.categorySlug);
+
+  /*
+   * ★応募の連絡先が無いお仕事は、払わせない。★ 公開しても応募の手段が無い掲載になる。
+   * 連絡先の欄ができる前の下書きが残っていても、ここで止める（Stripe を呼ぶ前）。
+   */
+  if (usesDirectInquiry(listing.categorySlug) && !listing.applyUrl && !listing.applyEmail) {
+    throw new AppError(
+      "validation_failed",
+      "応募の連絡先（応募ページの URL かメールアドレス）を入力してから、お支払いに進んでください。",
+      { detail: `direct-inquiry listing without contact: ${listingId}` },
+    );
+  }
 
   // やり直しのとき無効にする、前回ぶんの決済。無効化は下で行う。
   const stripeSecretKey = requireSecret(env, "STRIPE_SECRET_KEY");

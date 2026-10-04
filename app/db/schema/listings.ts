@@ -189,6 +189,13 @@ export const listingCategoryDetails = pgTable(
     qualifications: varchar("qualifications", { length: 500 }),
     benefits: varchar("benefits", { length: 500 }),
     companyName: varchar("company_name", { length: 80 }),
+    /**
+     * ★応募の連絡先（お仕事）。★ 応募は掲載者の外部の窓口へ直接行ってもらい、
+     * 応募の内容はこのサイトを通らない。どちらか1つ以上が必須
+     * （検証は domain/validation/listing.ts。URL は https だけ）。公開される欄。
+     */
+    applyUrl: varchar("apply_url", { length: 500 }),
+    applyEmail: varchar("apply_email", { length: 254 }),
 
     /** 検索に使わない補助情報だけを入れる。検索条件になるものは列にすること */
     extra: jsonb("extra").$type<Record<string, string>>(),

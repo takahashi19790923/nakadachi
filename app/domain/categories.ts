@@ -175,6 +175,13 @@ export interface CategoryDefinition {
    * «決済に進む» だけ。公開中のものの扱いは変えない。
    */
   readonly acceptsNewListings: boolean;
+  /**
+   * 問い合わせ・応募の受け方。
+   * - "message": サイト内のメッセージ（ログインが要る）
+   * - "direct": 掲載者の外部の窓口（応募ページ・メール）へ直接。★サイトは問い合わせる側の
+   *   情報を受け取らない。★ メッセージ・お気に入りはサーバー側で断る（お仕事）
+   */
+  readonly inquiry: "message" | "direct";
 }
 
 export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
@@ -192,6 +199,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesHandover: true,
     highlightFields: ["price", "itemCondition", "handoverMethod"],
     acceptsNewListings: true,
+    inquiry: "message",
   },
   giveaway: {
     slug: "giveaway",
@@ -208,6 +216,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesHandover: true,
     highlightFields: ["price", "itemCondition", "handoverMethod"],
     acceptsNewListings: true,
+    inquiry: "message",
   },
   rental: {
     slug: "rental",
@@ -224,6 +233,7 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesHandover: false,
     highlightFields: ["price", "rentalPeriod", "deposit", "itemCondition"],
     acceptsNewListings: true,
+    inquiry: "message",
   },
   help: {
     slug: "help",
@@ -239,12 +249,13 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesHandover: false,
     highlightFields: ["price", "availability", "serviceMode"],
     acceptsNewListings: true,
+    inquiry: "message",
   },
   job: {
     slug: "job",
     name: "お仕事",
     shortName: "仕事",
-    description: "地域の求人。アルバイトと正社員。",
+    description: "地域の求人。アルバイトと正社員。応募は掲載者の連絡先へ直接。",
     kinds: JOB_KINDS,
     kindLabel: "雇用形態",
     // 求人は「相談」「無料」を使わない。給与は必ず金額で示す。
@@ -254,11 +265,18 @@ export const CATEGORIES: Readonly<Record<CategorySlug, CategoryDefinition>> = {
     usesItemCondition: false,
     usesHandover: false,
     highlightFields: ["salary", "employmentType", "workHours", "companyName"],
-    // ★新規の受付を止めている（2026-10）。★ 求人の掲載の扱いを見直すまで。
-    // 一覧・検索・/c/job は残す。
-    acceptsNewListings: false,
+    // 2026-10-03 から止めていた新規の受付を、応募を外部の窓口へ直接にする作りで再開した。
+    // 止めるときはここを false にする（下書き・編集・決済の3か所で止まる）。
+    acceptsNewListings: true,
+    // ★応募は掲載者の外部の窓口へ直接。★ 求職者の情報を集めない作り（理由は非公開の判断メモ）。
+    inquiry: "direct",
   },
 };
+
+/** 掲載者の外部の窓口へ直接問い合わせるカテゴリか（サイト内のメッセージ・お気に入りを使わない） */
+export function usesDirectInquiry(slug: CategorySlug): boolean {
+  return CATEGORIES[slug].inquiry === "direct";
+}
 
 /** 新しい掲載を受け付けているか */
 export function isCategoryAcceptingNew(slug: CategorySlug): boolean {
