@@ -2,16 +2,17 @@ import { eq } from "drizzle-orm";
 import { RouterContextProvider } from "react-router";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { favorites, listings } from "~/db/schema/index.ts";
+import { favorites, listingImages, listings } from "~/db/schema/index.ts";
 import { appContext, type AppContext } from "~/server/app-context";
 import { csrfCookieName, issueCsrfToken } from "~/server/csrf.server";
 import type { Db } from "~/server/db.server";
-import { RATE_LIMITS, type RateLimitName } from "~/server/rate-limit.server";
+import { consumeRateLimit, RATE_LIMITS, type RateLimitName } from "~/server/rate-limit.server";
 import { createSession } from "~/server/session.server";
 import { closeTestDb, makeDraft, makeUser, resetDatabase, testEnv, testLogger } from "./helpers.ts";
 
 import { action as rawCloseAction } from "~/routes/listings.close";
 import { action as rawFavoriteAction } from "~/routes/listings.favorite";
+import { action as rawImagesAction } from "~/routes/listings.images";
 import { action as rawEditAction } from "~/routes/listings.edit";
 import { action as rawProfileAction } from "~/routes/mypage.profile";
 import { action as rawBlockAction } from "~/routes/users.block";
@@ -196,5 +197,50 @@ describe("★書き込みの回数に上限がある★", () => {
       .from(listings)
       .where(eq(listings.id, listingId));
     expect(row!.status).toBe("closed");
+  });
+});
+
+describe("★写真を外す操作は、上限に当たっても止めない★", () => {
+  /*
+   * 外すのは利用者を守る操作。写真の追加の枠（imageUpload）を使い切った人も外せること。
+   * 一度は同じ枠で数えていて、上限に当たると1時間外せなかった（2026-10-04 の反証）。
+   */
+  it("追加の枠を使い切っても、写真を外せる（追加は止まる）", async () => {
+    const user = await makeUser(db, "photo-remove@example.test");
+    const listingId = await makeDraft(db, user.id);
+    const imageId = "01JQZZZZZZZZZZZZZZZZZZZZZZ";
+    await db.insert(listingImages).values({
+      id: imageId,
+      listingId,
+      objectKey: `listings/${listingId}/${imageId}`,
+      contentType: "image/png",
+      byteSize: 4,
+      width: 100,
+      height: 100,
+      checksumSha256: "0".repeat(64),
+    });
+    for (let i = 0; i < RATE_LIMITS.imageUpload.max; i += 1) {
+      await consumeRateLimit(db, "imageUpload", user.id);
+    }
+    const cookies = await signIn(user.id);
+    const images = rawImagesAction as unknown as RouteFn;
+
+    // 追加は止まる（枠を使い切っていることの確認）。
+    const upload = await post(images, `/listings/${listingId}/images`, cookies, { listingId }, {
+      intent: "upload",
+    });
+    expect(upload.message ?? "").toContain(LIMITED);
+
+    // 外すのは通る。
+    const removed = await post(images, `/listings/${listingId}/images`, cookies, { listingId }, {
+      intent: "remove",
+      imageId,
+    });
+    expect(removed.message ?? "").not.toContain(LIMITED);
+    const [row] = await db
+      .select({ deletedAt: listingImages.deletedAt })
+      .from(listingImages)
+      .where(eq(listingImages.id, imageId));
+    expect(row!.deletedAt).not.toBeNull();
   });
 });

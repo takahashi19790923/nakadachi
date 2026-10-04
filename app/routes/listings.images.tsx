@@ -84,17 +84,24 @@ export async function action({ request, context: rawContext, params }: Route.Act
       readCookie(request, csrfCookieName(context.env)),
     );
 
-    // ★写真を外す操作も同じ枠で数える。★（監査 SEC-04。書き込みには上限を持たせる）
-    await enforceRateLimit(db, "imageUpload", user.id);
-
     const intent = formString(formData, "intent", "upload");
 
+    /*
+     * ★写真を外す操作は数えない。★
+     * 外すのは利用者を守る操作（写り込んだものを消したい、など）で、上限に当たった人が
+     * 外せなくなるほうが困る（退会の取り消しを数えないのと同じ考え）。行は増えず、
+     * 1件の写真は10枚までなので、繰り返しても書き込みは小さい。
+     * 一度は «書き込みには上限» として同じ枠で数えたが、反証で «上限に当たると
+     * 1時間写真を外せない» と分かって戻した（2026-10-04）。
+     */
     if (intent === "remove") {
       const imageId = formString(formData, "imageId");
       if (!isUlid(imageId)) throw notFound("malformed image id");
       await removeListingImage({ db, imageId, listingId: listing.id });
       return { message: null, fields: null, uploaded: 0 };
     }
+
+    await enforceRateLimit(db, "imageUpload", user.id);
 
     const files = formData
       .getAll("images")
