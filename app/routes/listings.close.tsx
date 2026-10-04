@@ -14,6 +14,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { AppError, notFound, toPublicError } from "~/server/errors";
 import { assertOwner, requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { getListingOwnership } from "~/server/repositories/listing-repository.server";
 import { transitionListing } from "~/server/services/listing-service.server";
 import { cancelOpenCheckouts } from "~/server/services/payment/payment-service.server";
@@ -56,6 +57,8 @@ export async function action({ request, context: rawContext, params }: Route.Act
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
+    // 書き込みの回数（監査 SEC-04。rate-limit.server.ts の説明）。
+    await enforceRateLimit(context.getDb(), "listingClose", user.id);
 
     const ownership = await getListingOwnership(db, params.listingId);
     if (!ownership) throw notFound(`listing not found: ${params.listingId}`);

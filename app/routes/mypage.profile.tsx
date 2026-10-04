@@ -15,6 +15,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { toPublicError } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { listPrefectures } from "~/server/repositories/location-repository.server";
 import { findBlockingWord } from "~/server/repositories/moderation-repository.server";
 import {
@@ -56,6 +57,8 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
+    // 書き込みの回数（監査 SEC-04。rate-limit.server.ts の説明）。
+    await enforceRateLimit(context.getDb(), "profileUpdate", user.id);
 
     const parsed = profileUpdateSchema.safeParse(formDataToObject(formData));
     if (!parsed.success) {

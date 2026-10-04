@@ -127,29 +127,58 @@ export async function uploadListingImage(options: {
   const objectKey = `listings/${listingId}/${imageId}`;
   const checksum = await sha256Hex(sanitized);
 
-  await env.MEDIA.put(objectKey, sanitized, {
-    httpMetadata: {
-      contentType: CONTENT_TYPE_BY_FORMAT[info.format],
-      // 配信は Worker が制御する。R2 側のキャッシュ指示は控えめにしておく。
-      cacheControl: "private, max-age=0",
-    },
-    customMetadata: {
-      listingId,
-      // ★元のファイル名を保存しない。★ 氏名が入っていることがある。
-      format: info.format,
-    },
-  });
+  /*
+   * ★枚数の確認と保存は、投稿の行を押さえてから1本ずつ行う。★（監査 SEC-04 の一部）
+   * 上の数え方だけだと、同じ投稿へ同時に送られた写真がどちらも «9枚» を読んで、
+   * 11枚目が入る。投稿の行を FOR UPDATE で押さえ、数え直してから置く。
+   * 上の確認は、上限に達している投稿のファイルを読む前に断るための早い確認として残す。
+   */
+  await db.transaction(async (tx) => {
+    const locked = await tx
+      .select({ id: listings.id })
+      .from(listings)
+      .where(eq(listings.id, listingId))
+      .for("update");
+    // 投稿が直前に消えていたら、R2 に置く前に止める（置いてから行の追加で落ちると、
+    // DB から辿れない物が R2 に残り、掃除でも回収できない）。
+    if (locked.length === 0) {
+      throw notFound(`listing vanished before image upload: ${listingId}`);
+    }
+    const [counted] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(listingImages)
+      .where(and(eq(listingImages.listingId, listingId), isNull(listingImages.deletedAt)));
+    const count = counted?.count ?? 0;
+    if (count >= MAX_IMAGES_PER_LISTING) {
+      throw invalidImage(
+        `写真は1件につき${MAX_IMAGES_PER_LISTING}枚までです。`,
+        `image limit reached under lock: ${count}`,
+      );
+    }
 
-  await db.insert(listingImages).values({
-    id: imageId,
-    listingId,
-    objectKey,
-    contentType: CONTENT_TYPE_BY_FORMAT[info.format],
-    byteSize: sanitized.byteLength,
-    width: info.width,
-    height: info.height,
-    checksumSha256: checksum,
-    position: currentCount,
+    await env.MEDIA.put(objectKey, sanitized, {
+      httpMetadata: {
+        contentType: CONTENT_TYPE_BY_FORMAT[info.format],
+        // 配信は Worker が制御する。R2 側のキャッシュ指示は控えめにしておく。
+        cacheControl: "private, max-age=0",
+      },
+      customMetadata: {
+        listingId,
+        // ★元のファイル名を保存しない。★ 氏名が入っていることがある。
+        format: info.format,
+      },
+    });
+    await tx.insert(listingImages).values({
+      id: imageId,
+      listingId,
+      objectKey,
+      contentType: CONTENT_TYPE_BY_FORMAT[info.format],
+      byteSize: sanitized.byteLength,
+      width: info.width,
+      height: info.height,
+      checksumSha256: checksum,
+      position: count,
+    });
   });
 
   logger.info("listing image stored", {

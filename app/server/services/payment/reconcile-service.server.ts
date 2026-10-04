@@ -255,6 +255,19 @@ export async function reconcilePayments(options: {
   );
 
   const to = env.EMAIL_REPLY_TO;
+  /*
+   * ★宛先が無ければ、送れないことをはっきり残して終える。★（監査 SEC-05 の後半）
+   * 型は必須だが、実行時に未設定のことはある（cron.server.ts も同じ確認をしている）。
+   * 確かめずに送ると、宛先の照合で落ちて «ops alert email failed» が件数ぶん並ぶだけで、
+   * 原因（宛先の未設定）が読み取れない。異常そのものは上のログに残っている。
+   */
+  if (!to) {
+    logger.error("payment anomalies found but EMAIL_REPLY_TO is not configured", undefined, {
+      anomalies: anomalies.length,
+      failedWebhooks,
+    });
+    return anomalies.length + failedWebhooks;
+  }
 
   /*
    * ★失敗した Webhook についてもメールを出す。★ 以前は件数をログに出す

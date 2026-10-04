@@ -84,6 +84,9 @@ export async function action({ request, context: rawContext, params }: Route.Act
       readCookie(request, csrfCookieName(context.env)),
     );
 
+    // ★写真を外す操作も同じ枠で数える。★（監査 SEC-04。書き込みには上限を持たせる）
+    await enforceRateLimit(db, "imageUpload", user.id);
+
     const intent = formString(formData, "intent", "upload");
 
     if (intent === "remove") {
@@ -92,8 +95,6 @@ export async function action({ request, context: rawContext, params }: Route.Act
       await removeListingImage({ db, imageId, listingId: listing.id });
       return { message: null, fields: null, uploaded: 0 };
     }
-
-    await enforceRateLimit(db, "imageUpload", user.id);
 
     const files = formData
       .getAll("images")
