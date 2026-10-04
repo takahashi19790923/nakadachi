@@ -15,8 +15,10 @@ import { requireConnectionString } from "./db.ts";
  *
  * ★Supabase では PUBLIC からの CONNECT を剥がさない。★ Supabase 自身の内部ロール
  * （supabase_admin / authenticator など）が同じ postgres データベースへ繋ぐ。
- * Neon のときは preview と本番が同居していたので剥がしたが、Supabase の
- * このプロジェクトは nakadachi の本番専用なので、越境の相手が居ない。
+ * Neon のときは preview と本番が同居していたので剥がしたが、Supabase では剥がさない。
+ * ★2026-10-03 から別サービス kyodo-junin が同じ DB に同居している★（ロール kj_owner・kj_app、
+ * スキーマ app・app_auth・app_private・kj_meta。データは権限で互いに読めない）。このスクリプトは
+ * public とこのアプリのロールだけを触る。kj_* のロール・スキーマは消さない（SECURITY.md「DB ロールの分離」）。
  *
  * 既にロールがあれば（やり直し）、パスワードだけ作り直す。
  *
