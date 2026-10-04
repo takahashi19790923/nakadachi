@@ -2,12 +2,14 @@ import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 
 import {
   blocks,
+  categories,
   conversationParticipants,
   conversationThreads,
   listings,
   messages,
   userProfiles,
 } from "~/db/schema/index.ts";
+import { isCategorySlug, usesDirectInquiry } from "~/domain/categories";
 import { ulid } from "~/domain/ulid.ts";
 import type { Db } from "../db.server.ts";
 import { AppError, notFound } from "../errors.ts";
@@ -17,6 +19,26 @@ import {
   findBlockingWord,
   findFlaggedWords,
 } from "../repositories/moderation-repository.server.ts";
+
+/**
+ * お仕事など «掲載者の外部の窓口へ直接» のカテゴリへのメッセージを断る。
+ *
+ * ★サイトは問い合わせる側（求職者）の情報を受け取らない作り。★ 応募は掲載にある
+ * 応募ページ・メールへ直接してもらう。画面でボタンを隠すだけだと、送信を書き換えれば
+ * 会話を作れるので、サーバーで断る（求職者の情報を集めない作りの前提）。
+ */
+function directInquiryError(slug: string): AppError {
+  return new AppError(
+    "conflict",
+    "お仕事は、掲載にある応募先（応募ページ・メール）へ直接ご応募ください。サイト内のメッセージは使えません。",
+    { detail: `message refused for direct-inquiry category: ${slug}` },
+  );
+}
+
+function isDirectInquirySlug(slug: string): boolean {
+  // 知らないカテゴリは «直接» 扱い（メッセージを開かない側）に倒す。
+  return !isCategorySlug(slug) || usesDirectInquiry(slug);
+}
 
 /**
  * サイト内メッセージ。
@@ -56,13 +78,15 @@ export async function ensureThread(options: {
   if (flags.messagesPaused) throw pausedError("message", flags.notice);
 
   const listingRows = await db
-    .select({ ownerId: listings.ownerId, status: listings.status })
+    .select({ ownerId: listings.ownerId, status: listings.status, categorySlug: categories.slug })
     .from(listings)
+    .innerJoin(categories, eq(categories.id, listings.categoryId))
     .where(and(eq(listings.id, listingId), isNull(listings.deletedAt)))
     .limit(1);
 
   const listing = listingRows[0];
   if (!listing) throw notFound(`listing not found: ${listingId}`);
+  if (isDirectInquirySlug(listing.categorySlug)) throw directInquiryError(listing.categorySlug);
 
   if (listing.ownerId === inquirerId) {
     throw new AppError("validation_failed", "自分の投稿には問い合わせできません。", {
@@ -290,6 +314,19 @@ export async function sendMessage(options: {
   // ★メッセージ送信の停止スイッチ。★ 読むほうは止めない。
   const flags = await getSiteFlags(db);
   if (flags.messagesPaused) throw pausedError("message", flags.notice);
+
+  // ★お仕事の会話には送らせない。★ 受付を止める前に作られた会話が残っていても同じ。
+  const threadCategory = await db
+    .select({ slug: categories.slug })
+    .from(conversationThreads)
+    .innerJoin(listings, eq(listings.id, conversationThreads.listingId))
+    .innerJoin(categories, eq(categories.id, listings.categoryId))
+    .where(eq(conversationThreads.id, threadId))
+    .limit(1);
+  const threadSlug = threadCategory[0]?.slug;
+  if (threadSlug !== undefined && isDirectInquirySlug(threadSlug)) {
+    throw directInquiryError(threadSlug);
+  }
 
   const blockedWord = await findBlockingWord(db, body);
   if (blockedWord) {

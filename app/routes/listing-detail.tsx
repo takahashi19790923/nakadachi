@@ -11,6 +11,7 @@ import {
   LISTING_KIND_LABEL,
   type HandoverMethod,
   type ItemCondition,
+  usesDirectInquiry,
 } from "~/domain/categories";
 import {
   formatDateJa,
@@ -54,9 +55,15 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
   // 「非公開です」と返すと、その ID の投稿が存在することが分かる。
   if (!listing) throw notFound(`listing not visible: ${params.listingId}`);
 
+  /*
+   * ★お仕事は、ログインの有無で中身を変えない。★ 求職者の情報（誰がどの求人を
+   * お気に入りにしたか・ログインしているか）を求人の表示に使わない作り。
+   * お気に入りも引かず、ログインしていない人と同じ画面にする。投稿者本人の編集ボタンだけは出す。
+   */
+  const direct = usesDirectInquiry(listing.categorySlug);
   const [owner, favorited] = await Promise.all([
     getPublicProfile(db, listing.ownerId),
-    viewer ? isFavorited(db, viewer.id, listing.id) : Promise.resolve(false),
+    viewer && !direct ? isFavorited(db, viewer.id, listing.id) : Promise.resolve(false),
   ]);
 
   /*
@@ -99,7 +106,7 @@ export async function loader({ request, context: rawContext, params }: Route.Loa
     ownerName: owner?.displayName ?? "退会したユーザー",
     favorited,
     isOwner: viewer?.id === listing.ownerId,
-    isLoggedIn: viewer !== null,
+    isLoggedIn: direct ? false : viewer !== null,
     csrfToken: context.csrfToken,
     origin: context.env.APP_ORIGIN,
   };
@@ -236,6 +243,7 @@ export default function ListingDetail({ loaderData }: Route.ComponentProps) {
   const { listing, ownerName, favorited, isOwner, isLoggedIn, csrfToken } =
     loaderData;
   const category = CATEGORIES[listing.categorySlug];
+  const direct = usesDirectInquiry(listing.categorySlug);
   const price = formatListingPrice({
     categorySlug: listing.categorySlug,
     priceType: listing.priceType,
@@ -368,12 +376,21 @@ export default function ListingDetail({ loaderData }: Route.ComponentProps) {
           {listing.details?.benefits ? (
             <Row label="福利厚生">{listing.details.benefits}</Row>
           ) : null}
+          {/*
+            ★掲載日を出す（全カテゴリ）。★ 情報の時点を明らかにする（職業安定法施行規則4条の3
+            第4項3号ロ。監査 JOB-05）。以前は «掲載終了予定» しか無かった。
+          */}
+          <Row label="掲載日">
+            {listing.publishedAt ? formatDateJa(listing.publishedAt) : "未定"}
+          </Row>
           <Row label="掲載終了予定">
             {listing.expiresAt ? formatDateJa(listing.expiresAt) : "未定"}
           </Row>
           <Row label="投稿者">{ownerName}</Row>
         </dl>
       </section>
+
+      {direct ? <ApplyContact details={listing.details} /> : null}
 
       <section className="mt-6 flex flex-wrap gap-3">
         {isOwner ? (
@@ -388,7 +405,7 @@ export default function ListingDetail({ loaderData }: Route.ComponentProps) {
               掲載を終了する
             </Link>
           </>
-        ) : (
+        ) : direct ? null : (
           <>
             <Link
               to={`/listings/${listing.id}/contact`}
@@ -442,11 +459,72 @@ export default function ListingDetail({ loaderData }: Route.ComponentProps) {
             <Link to={`/listings/${listing.id}/report`} className="link">
               この投稿を通報する
             </Link>
-            {isLoggedIn ? null : "（ログインが必要です）"}
+            {direct
+              ? "（通報にはログインが必要です）"
+              : isLoggedIn
+                ? null
+                : "（ログインが必要です）"}
           </li>
         </ul>
       </section>
     </div>
+  );
+}
+
+/**
+ * お仕事の応募の窓口。ログインの有無にかかわらず同じ内容を出す。
+ *
+ * ★応募は掲載者の外部の窓口へ直接。★ なかだちは応募を取り次がず、応募した人の情報を
+ * 受け取らない。外部のリンクは利用者の入力なので nofollow・ugc・noopener を付ける。
+ */
+function ApplyContact({
+  details,
+}: {
+  details: { applyUrl: string | null; applyEmail: string | null } | null;
+}) {
+  const applyUrl = details?.applyUrl ?? null;
+  const applyEmail = details?.applyEmail ?? null;
+  return (
+    <section className="card mt-6 p-4" aria-labelledby="apply-heading">
+      <h2 id="apply-heading" className="text-lg font-bold">
+        応募・お問い合わせ
+      </h2>
+      <p className="mt-1 text-sm text-washi-700">
+        この求人への応募・お問い合わせは、下の連絡先へ直接お願いします。なかだちは応募を
+        取り次がず、応募の内容（氏名・連絡先・経歴など）はなかだちを通りません。
+      </p>
+      {applyUrl || applyEmail ? (
+        <ul className="mt-3 space-y-3">
+          {applyUrl ? (
+            <li>
+              <a
+                href={applyUrl}
+                target="_blank"
+                rel="nofollow ugc noopener noreferrer"
+                className="btn btn-primary"
+              >
+                応募ページを開く（外部のサイト）
+              </a>
+              <span className="mt-1 block break-all text-xs text-washi-600">{applyUrl}</span>
+            </li>
+          ) : null}
+          {applyEmail ? (
+            <li className="text-washi-900">
+              メール:{" "}
+              <a href={`mailto:${applyEmail}`} rel="nofollow ugc" className="link break-all">
+                {applyEmail}
+              </a>
+            </li>
+          ) : null}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-washi-700">連絡先が登録されていません。</p>
+      )}
+      <p className="mt-3 text-xs text-washi-600">
+        外部のサイトやメールでのやり取りは、なかだちの管理の外です。個人情報を送る前に、
+        募集している会社・事業者を確かめてください。
+      </p>
+    </section>
   );
 }
 

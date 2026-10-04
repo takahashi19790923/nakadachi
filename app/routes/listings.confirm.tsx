@@ -3,7 +3,7 @@ import { Link, useFetcher } from "react-router";
 
 import { CsrfInput } from "~/components/form";
 import { FeeNotice, StatusBadge } from "~/components/ui";
-import { CATEGORIES, LISTING_KIND_LABEL } from "~/domain/categories";
+import { CATEGORIES, LISTING_KIND_LABEL, usesDirectInquiry } from "~/domain/categories";
 import { formatListingPrice } from "~/domain/listing-view";
 import { LISTING_FEE_JPY, formatJpy } from "~/domain/pricing";
 import { privatePageMeta } from "~/domain/seo";
@@ -92,7 +92,11 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
    * 支払いに進めるのは下書きと決済待ちだけ、内容を直せるのは下書きと公開中だけ
    * （決済の手続き中は直させない＝払った内容と違う掲載を出さないため）。
    */
-  const payable = listing.status === "draft" || listing.status === "payment_pending";
+  // お仕事で応募の連絡先が無ければ、決済で必ず止まる（payment-service）。押すと失敗するボタンを出さない。
+  const direct = usesDirectInquiry(listing.categorySlug);
+  const missingContact = direct && !listing.details?.applyUrl && !listing.details?.applyEmail;
+  const payable =
+    (listing.status === "draft" || listing.status === "payment_pending") && !missingContact;
   const editable = listing.status === "draft" || listing.status === "published";
 
   return (
@@ -132,6 +136,25 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
         <p className="mt-3 whitespace-pre-wrap break-words text-washi-800">
           {listing.body}
         </p>
+        {direct ? (
+          /*
+            お仕事は応募の連絡先が公開される。払う前に、何が出るかを見せる
+            （連絡先が無いと決済で止まる。payment-service）。
+          */
+          <div className="mt-3 rounded-lg bg-washi-100 p-3 text-sm text-washi-800">
+            <p className="font-semibold">応募の連絡先（公開されます）</p>
+            {listing.details?.applyUrl || listing.details?.applyEmail ? (
+              <ul className="mt-1 space-y-1 break-all">
+                {listing.details.applyUrl ? <li>応募ページ: {listing.details.applyUrl}</li> : null}
+                {listing.details.applyEmail ? <li>メール: {listing.details.applyEmail}</li> : null}
+              </ul>
+            ) : (
+              <p className="mt-1">
+                まだ入力されていません。「内容を修正する」から入力してください（入力するまでお支払いに進めません）。
+              </p>
+            )}
+          </div>
+        ) : null}
         {listing.images.length > 0 ? (
           <p className="mt-3 text-sm text-washi-600">
             写真 {listing.images.length} 枚
@@ -166,7 +189,9 @@ export default function ConfirmListing({ loaderData }: Route.ComponentProps) {
 
       {!alreadyPublished && !payable ? (
         <p className="mt-8 rounded-lg bg-washi-100 p-4 text-washi-800">
-          この投稿は、いまはお支払いに進めません。
+          {missingContact
+            ? "応募の連絡先を入力すると、お支払いに進めます。「内容を修正する」から入力してください。"
+            : "この投稿は、いまはお支払いに進めません。"}
           <Link to="/mypage" className="link ml-1">
             マイページへ戻る
           </Link>

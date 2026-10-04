@@ -8,7 +8,7 @@ import {
   isValidListingFeePayment,
 } from "~/domain/pricing";
 import { CATEGORY_LIST } from "~/domain/categories";
-import { categoryKindLabel } from "~/domain/listing-view";
+import { categoryKindLabel, formatListingPrice } from "~/domain/listing-view";
 
 /**
  * 掲載料。
@@ -91,5 +91,29 @@ describe("カテゴリ・種別の見出し", () => {
         expect(new Set(parts).size, label).toBe(parts.length);
       }
     }
+  });
+});
+
+describe("★お仕事の給与の表示★（監査 JOB-10）", () => {
+  function salary(priceJpy: number, salaryMaxJpy: number | null) {
+    return formatListingPrice({
+      categorySlug: "job",
+      priceType: "fixed",
+      priceUnit: "hour",
+      priceJpy,
+      salaryMaxJpy,
+    });
+  }
+
+  it("上限が無ければ «〜» を付けない（それ以上もあるように見せない）", () => {
+    expect(salary(1100, null)).toBe("時給 1,100円");
+  });
+
+  it("上限が下限と同じでも «〜» を付けない", () => {
+    expect(salary(1100, 1100)).toBe("時給 1,100円");
+  });
+
+  it("幅があるときだけ «下限〜上限»", () => {
+    expect(salary(1100, 1300)).toBe("時給 1,100円〜1,300円");
   });
 });

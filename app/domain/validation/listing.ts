@@ -18,6 +18,7 @@ import {
 import { LISTING_DURATION_DAYS_CHOICES } from "../pricing";
 import {
   areaNoteSchema,
+  emailSchema,
   jpyAmountSchema,
   locationCodeSchema,
   optionalText,
@@ -248,8 +249,16 @@ const jobSchema = z
         .min(1, "会社名または事業者名を入力してください")
         .max(80, "80文字以内で入力してください"),
     ),
+    /*
+     * ★応募の連絡先。★ お仕事は、応募を掲載者の外部の窓口（応募ページかメール）へ
+     * 直接行ってもらう作り。このサイトは求職者の情報を受け取らない。
+     * どちらか1つ以上が必須（下の refineApplyContact）。
+     */
+    applyUrl: optionalText(500),
+    applyEmail: optionalText(254),
   })
   .transform((data, ctx) => {
+    const contact = refineApplyContact(data, ctx);
     const min = refinePrice(data, ctx);
     let max: number | null = null;
     if (data.salaryMaxJpy !== undefined && data.salaryMaxJpy !== "") {
@@ -271,8 +280,90 @@ const jobSchema = z
         }
       }
     }
-    return { ...data, priceJpy: min, salaryMaxJpy: max };
+    return { ...data, priceJpy: min, salaryMaxJpy: max, ...contact };
   });
+
+/**
+ * 応募ページの URL を確かめて、正規化した形を返す（不正なら null）。
+ *
+ * ★https だけ。★ http は途中で書き換えられうる。javascript: や data: は論外。
+ * ★URL に資格情報（user:pass@）を入れさせない。★ 公開される欄なので、
+ * うっかり貼ったパスワードがそのまま出る。
+ */
+export function normalizeApplyUrl(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "") return null;
+  // ホスト名に «.» が無いもの（https://localhost など）は外部の応募先ではない。
+  if (!url.hostname.includes(".")) return null;
+  const normalized = url.toString();
+  return normalized.length <= 500 ? normalized : null;
+}
+
+/** 応募のメールアドレスとして通す形（英数字と . _ + - だけ。mailto の欄の区切りになる文字を入れない） */
+const APPLY_EMAIL_PATTERN = /^[a-z0-9._+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** https の URL として読めるが、正規化すると 500 文字を超えるか */
+function isOverlongHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.toString().length > 500;
+  } catch {
+    return false;
+  }
+}
+
+/** お仕事の応募の連絡先を検証し、正規化した値を返す */
+function refineApplyContact(
+  data: { applyUrl?: string; applyEmail?: string },
+  ctx: z.RefinementCtx,
+): { applyUrl: string | null; applyEmail: string | null } {
+  let applyUrl: string | null = null;
+  let applyEmail: string | null = null;
+  if (data.applyUrl !== undefined) {
+    applyUrl = normalizeApplyUrl(data.applyUrl);
+    if (applyUrl === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["applyUrl"],
+        // 日本語などは符号化で長くなる。長すぎて落ちたのに «https で始まる…» と出すと直し方が分からない。
+        message: isOverlongHttpsUrl(data.applyUrl)
+          ? "URL が長すぎます。500文字以内の URL を入力してください"
+          : "https:// で始まる応募ページの URL を入力してください",
+      });
+    }
+  }
+  if (data.applyEmail !== undefined) {
+    const parsed = emailSchema.safeParse(data.applyEmail);
+    /*
+     * ★mailto に入るので、普通のアドレスの形だけを通す。★（PR レビュー M-1）
+     * 共通の emailSchema は «@ と . がある» 程度で、«?bcc=…&body=…» を付けても通る。
+     * それを mailto: に入れると、画面に出していない宛先や本文がメールソフトに勝手に入る。
+     */
+    if (parsed.success && APPLY_EMAIL_PATTERN.test(parsed.data)) {
+      applyEmail = parsed.data;
+    } else {
+      ctx.addIssue({
+        code: "custom",
+        path: ["applyEmail"],
+        message: "メールアドレスの形式をご確認ください",
+      });
+    }
+  }
+  if (data.applyUrl === undefined && data.applyEmail === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["applyUrl"],
+      message: "応募の連絡先（応募ページの URL かメールアドレス）を1つ以上入力してください",
+    });
+  }
+  return { applyUrl, applyEmail };
+}
 
 /**
  * 投稿の入力。カテゴリで分岐する。

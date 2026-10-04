@@ -92,6 +92,8 @@ function toDetailValues(input: ListingInput) {
         qualifications: input.qualifications ?? null,
         benefits: input.benefits ?? null,
         companyName: input.companyName,
+        applyUrl: input.applyUrl,
+        applyEmail: input.applyEmail,
       };
   }
 }
