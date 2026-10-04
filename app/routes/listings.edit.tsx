@@ -8,6 +8,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { notFound, toPublicError } from "~/server/errors";
 import { assertOwner, requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { parseListingForm } from "~/server/listing-form.server";
 import { getListingForOwner } from "~/server/repositories/listing-repository.server";
 import {
@@ -63,6 +64,8 @@ export async function action({ request, context: rawContext, params }: Route.Act
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
+    // 書き込みの回数（監査 SEC-04。rate-limit.server.ts の説明）。
+    await enforceRateLimit(context.getDb(), "listingEdit", user.id);
 
     const listing = await getListingForOwner(db, params.listingId);
     if (!listing) throw notFound(`listing not found: ${params.listingId}`);

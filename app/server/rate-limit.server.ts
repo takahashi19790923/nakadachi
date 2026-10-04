@@ -79,6 +79,22 @@ export const RATE_LIMITS = {
    * メールが止まった（監査 SEC-12）。正規の利用で1日に3回を超えることはない。
    */
   accountDeletionToggle: { windowSeconds: 86_400, max: 3 },
+  /*
+   * ★書き込みには、利用者単位の上限を必ず持たせる。★（監査 SEC-04）
+   * 以前はプロフィール・投稿の編集・掲載の終了・お気に入り・ブロックに上限が無く、
+   * 1つのアカウントから DB への書き込みを好きなだけ積めた（プロフィールは公開される欄）。
+   * 正規の利用では届かない値にしてある（1時間あたり）。
+   */
+  /** プロフィールの更新（公開される表示名・自己紹介） */
+  profileUpdate: { windowSeconds: 3600, max: 20 },
+  /** 投稿の編集 */
+  listingEdit: { windowSeconds: 3600, max: 60 },
+  /** 掲載の終了・削除 */
+  listingClose: { windowSeconds: 3600, max: 30 },
+  /** お気に入りの追加・解除 */
+  favoriteToggle: { windowSeconds: 3600, max: 120 },
+  /** ブロック・ブロックの解除 */
+  blockToggle: { windowSeconds: 3600, max: 30 },
   /** 管理画面の第3層 */
   adminGate: { windowSeconds: 900, max: 10 },
   /**

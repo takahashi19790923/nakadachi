@@ -5,6 +5,7 @@ import { readCookie } from "~/server/cookies.server";
 import { assertSameOrigin, csrfCookieName, verifyCsrfToken } from "~/server/csrf.server";
 import { asRouteError, notFound } from "~/server/errors";
 import { requireUser } from "~/server/guards.server";
+import { enforceRateLimit } from "~/server/rate-limit.server";
 import { setBlock } from "~/server/services/engagement-service.server";
 import { safeRedirectPath } from "~/domain/validation/common";
 import type { Route } from "./+types/users.block";
@@ -27,6 +28,8 @@ export async function action({ request, context: rawContext, params }: Route.Act
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
+    // 書き込みの回数（監査 SEC-04。rate-limit.server.ts の説明）。
+    await enforceRateLimit(context.getDb(), "blockToggle", user.id);
 
     await setBlock({
       db: context.getDb(),

@@ -281,6 +281,30 @@ describe("警報の送りかた", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("★宛先が未設定なら、送れないことをはっきり残して件数は返す★", async () => {
+    const listingId = await makeDraft(db, userId, { status: "draft" });
+    await makePaidPayment(listingId, 90);
+
+    const errors: string[] = [];
+    const logger = {
+      ...testLogger,
+      error: (message: string) => {
+        errors.push(message);
+      },
+    };
+    const found = await reconcilePayments({ db, env: { ...env, EMAIL_REPLY_TO: "" }, logger });
+
+    expect(found).toBe(1);
+    expect(errors).toContain("payment anomalies found but EMAIL_REPLY_TO is not configured");
+    // 送ろうとして落ちた記録（ops alert email failed）は並ばない。
+    expect(errors).not.toContain("ops alert email failed");
+    const sent = await db
+      .select({ id: emailDeliveryLogs.id })
+      .from(emailDeliveryLogs)
+      .where(eq(emailDeliveryLogs.template, "ops_payment_alert"));
+    expect(sent).toHaveLength(0);
+  });
+
   it("異常が無ければ何も送らない", async () => {
     expect(await reconcilePayments({ db, env, logger: testLogger })).toBe(0);
 
