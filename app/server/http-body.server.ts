@@ -1,3 +1,5 @@
+import { MAX_IMAGES_PER_LISTING, MAX_IMAGE_BYTES } from "~/domain/image-limits.ts";
+
 /**
  * 本文を上限まで読み、バイト列で返す。超えたら読むのをやめて null を返す。
  * 本文が無ければ空のバイト列。
@@ -54,12 +56,21 @@ const BODYLESS_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const DEFAULT_BODY_LIMIT = 64 * 1024;
 
 /**
- * 画像の登録だけ大きい。1枚 5MB（MAX_IMAGE_BYTES）に multipart の枠の分を足した値。
- * 枚数の上限は routes 側で見る。ここは «メモリに読む前の天井» でしかない。
+ * 画像の登録だけ大きい。★1回の送信に複数枚が入る★（input は multiple で、1件の上限
+ * MAX_IMAGES_PER_LISTING 枚を一度に選べる）ので、1枚ぶん（MAX_IMAGE_BYTES）ではなく
+ * «枚数の上限 × 1枚の上限» に multipart の枠の分（1MB）を足した値。1枚ごとの大きさ・
+ * 枚数は routes 側で見る。ここは «メモリに読む前の天井» でしかない。
  */
-export const IMAGE_UPLOAD_BODY_LIMIT = 6 * 1024 * 1024;
+export const IMAGE_UPLOAD_BODY_LIMIT =
+  MAX_IMAGES_PER_LISTING * MAX_IMAGE_BYTES + 1024 * 1024;
 
-const IMAGE_UPLOAD_PATH = /^\/listings\/[^/]+\/images\/?$/;
+/**
+ * 写真の登録のパス。★`.data` と `/_.data` も含める。★ JS が動いているときの
+ * フォームの送信先は react-router の single fetch で `/listings/<id>/images.data`
+ * （索引ルートなら `/_.data`）になる。素のパスだけ見ると、ふつうの利用者の送信が
+ * 既定の 64KB に当たって 413 になる。
+ */
+const IMAGE_UPLOAD_PATH = /^\/listings\/[^/]+\/images(?:\.data|\/_\.data|\/)?$/;
 const STRIPE_WEBHOOK_PATH = /^\/api\/stripe\/webhook\/?$/;
 
 /**

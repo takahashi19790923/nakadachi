@@ -90,9 +90,22 @@ describe("readBodyBytesWithLimit", () => {
 });
 
 describe("bodyLimitFor（パス → 入口の本文の上限）", () => {
-  it("画像の登録だけ 6MB", () => {
-    expect(bodyLimitFor("/listings/01ABC/images")).toBe(6 * 1024 * 1024);
+  it("画像の登録だけ大きい（枚数の上限 × 1枚の上限 ＋ 1MB）", () => {
+    expect(IMAGE_UPLOAD_BODY_LIMIT).toBe(10 * 5 * 1024 * 1024 + 1024 * 1024);
     expect(bodyLimitFor("/listings/01ABC/images")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/images/")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+  });
+
+  it("★JS が動いているときの送信先（.data・/_.data）も画像の上限★", () => {
+    // react-router の single fetch はフォームの送信先に .data を付ける。
+    // 素のパスだけ見ると、ふつうの利用者の写真が 64KB に当たって 413 になる。
+    expect(bodyLimitFor("/listings/01ABC/images.data")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/images/_.data")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+    // .data を付けても別のパスは借りられない。
+    expect(bodyLimitFor("/listings/01ABC/images/extra.data")).toBe(DEFAULT_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/images.data/x")).toBe(DEFAULT_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/imagesx.data")).toBe(DEFAULT_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/edit.data")).toBe(DEFAULT_BODY_LIMIT);
   });
 
   it("Stripe の Webhook は入口では読まない（null）", () => {
@@ -106,7 +119,7 @@ describe("bodyLimitFor（パス → 入口の本文の上限）", () => {
     expect(bodyLimitFor("/anything/else")).toBe(64 * 1024);
   });
 
-  it("★画像の口に似たパスで 6MB を借りられない★", () => {
+  it("★画像の口に似たパスで画像の上限を借りられない★", () => {
     // 末尾に別の段が付く・id の段が空・別の語で終わる、は 64KB のまま。
     expect(bodyLimitFor("/listings/01ABC/images/extra")).toBe(64 * 1024);
     expect(bodyLimitFor("/listings//images")).toBe(64 * 1024);
