@@ -65,6 +65,19 @@ async function main(): Promise<void> {
       `alter default privileges in schema public grant usage, select on sequences to ${ROLE}`,
     );
     /*
+     * ★日次の掃除が呼ぶ関数の実行権。★ 移行 0009 は «流した時点でロールがあれば» GRANT するだけ
+     * なので、移行の後にロールを作る（新しい環境・作り直し）と実行権が付かず、日次の
+     * purgeAuthAuditLogs が permission denied で毎日落ちる（2026-08〜10 の事故と同じ型）。
+     * 関数が無い環境（0009 より前）でも止まらないよう、存在するときだけ付ける。
+     */
+    await owner.query(`
+      do $$
+      begin
+        if to_regprocedure('public.purge_auth_audit_logs(integer)') is not null then
+          grant execute on function public.purge_auth_audit_logs(integer) to ${ROLE};
+        end if;
+      end $$`);
+    /*
      * ★監査の記録は、書き足せるが消せない。★
      *
      * audit_logs と admin_actions は、事故のあとで「誰が何をしたか」を

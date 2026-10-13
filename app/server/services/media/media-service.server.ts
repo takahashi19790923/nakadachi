@@ -331,6 +331,7 @@ export async function purgeDeletedImages(options: {
     .limit(options.limit ?? 200);
 
   let purged = 0;
+  let failed = 0;
   for (const row of due) {
     try {
       await env.MEDIA.delete(row.objectKey);
@@ -339,7 +340,16 @@ export async function purgeDeletedImages(options: {
     } catch (error) {
       // ★キーをログへ出さない。★ 件数だけを残す。
       logger.error("failed to purge media object", error);
+      failed += 1;
     }
+  }
+  /*
+   * ★1件でも消せなければ «失敗» として返す。★ 件数だけ返して正常終了すると、R2 の資格や
+   * binding の不具合で毎日全件が失敗しても cron の結果は 0 件の成功に見え、警報が鳴らない。
+   * 写真が残っている投稿は掃除が黙って見送り続け、保持期間の約束が静かに崩れる。
+   */
+  if (failed > 0) {
+    throw new Error(`failed to purge ${failed} media object(s) (purged ${purged})`);
   }
   return purged;
 }

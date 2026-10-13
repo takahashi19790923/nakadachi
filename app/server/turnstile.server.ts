@@ -77,6 +77,8 @@ export async function verifyTurnstile(options: {
     const response = await fetch(SITEVERIFY_URL, {
       method: "POST",
       body: form,
+      // 相手が詰まったときにログインの画面ごと待たせない（待ち時間は CPU の上限で止まらない）。
+      signal: AbortSignal.timeout(5_000),
     });
     // ★応答本文を必ず読み切る。★ 読まずに return すると接続が開いたままになり、
     // 同一オリジンへの同時接続を食い潰していく。curl では再現しない。

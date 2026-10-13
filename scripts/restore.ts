@@ -21,7 +21,7 @@ import {
 /**
  * バックアップの流し込み。
  *
- *   pnpm run db:restore <対象> <ファイル> [--replace] [--yes]
+ *   pnpm run db:restore <対象> <ファイル> [--replace] [--yes] [--allow-env-mismatch=<環境>]
  *
  * 例:
  *   pnpm run db:restore dev ./db-backup/2026-08-25.json --replace
@@ -43,12 +43,13 @@ import {
 function usage(): never {
   console.error(
     [
-      "使い方: pnpm run db:restore <対象> <ファイル> [--replace] [--yes]",
+      "使い方: pnpm run db:restore <対象> <ファイル> [--replace] [--yes] [--allow-env-mismatch=<環境>]",
       "",
       "  対象      dev | preview | production | production-neon",
       "  ファイル  書き出した JSON（R2 の db/YYYY-MM-DD.json を落としたもの）",
       "  --replace 対象の表を空にしてから入れる（復旧はこちら）",
-      "  --yes     本番への確認を飛ばす",
+      "  --yes     本番への確認を飛ばす（写しの環境と流す先の食い違いの確認は飛ばない）",
+      "  --allow-env-mismatch=<環境>  写しの環境と違う <環境> へ流すときだけ、その確認を飛ばす",
       "",
       "★先に pnpm run db:migrate <対象> で器を作っておくこと。★",
     ].join("\n"),
@@ -93,7 +94,9 @@ async function main(): Promise<void> {
     console.log(
       `\n★注意★ 写しの環境（${backup.environment}）と流し込む先（${targetEnv}）が違います。`,
     );
-    if (!process.argv.includes("--yes")) {
+    // ★--yes では飛ばせない。★ 飛ばせると «preview の写しで本番を入れ替える» が何も聞かれずに通る。
+    // 飛ばすなら、食い違いの先の環境名を明示した旗を要求する。
+    if (!process.argv.includes(`--allow-env-mismatch=${targetEnv}`)) {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const answer = await rl.question("それでも続けますか？ yes と入力してください: ");
       rl.close();

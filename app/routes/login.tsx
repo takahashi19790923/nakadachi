@@ -48,9 +48,12 @@ export function meta(): Route.MetaDescriptors {
 
 export async function action({ request, context: rawContext }: Route.ActionArgs) {
   const context = getApp(rawContext);
-  const formData = await request.formData();
 
   try {
+    // ★本文の読み取りも try の中。★ 壊れた multipart で TypeError を投げると 500 と
+    // «unhandled» のログになり、未ログインでいくらでも増やせた。
+    const formData = await request.formData();
+
     // ★順序が大事。★
     // 1. Origin の照合（ヘッダだけを見るので安い）
     assertSameOrigin(request, context.env);

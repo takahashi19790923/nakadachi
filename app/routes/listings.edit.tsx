@@ -15,7 +15,7 @@ import {
   listAllCities,
   listPrefectures,
 } from "~/server/repositories/location-repository.server";
-import { updateListing } from "~/server/services/listing-service.server";
+import { flagPublishedListing, updateListing } from "~/server/services/listing-service.server";
 import type { Route } from "./+types/listings.edit";
 import { getApp } from "~/server/app-context";
 
@@ -76,6 +76,16 @@ export async function action({ request, context: rawContext, params }: Route.Act
 
     // ★公開済みの通常編集では再課金しない。★ 状態は published のまま。
     await updateListing(db, params.listingId, parsed.data);
+
+    /*
+     * ★公開中の編集にも、公開時と同じ照合をかける。★ 以前は支払いの成立のときだけ
+     * flagPublishedListing（要確認の語・区切りをまたいだ禁止語）を呼んでいたので、
+     * 無難な内容で公開してから編集で書き換えると、確認待ちに入らず公開が続いた。
+     * 失敗しても保存は巻き戻さない（中で握りつぶす）。
+     */
+    if (listing.status === "published") {
+      await flagPublishedListing({ db, logger: context.logger, listingId: params.listingId });
+    }
 
     return redirect(
       listing.status === "published"

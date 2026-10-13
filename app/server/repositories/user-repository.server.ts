@@ -1,6 +1,6 @@
 import { DELETION_GRACE_DAYS } from "~/domain/account";
 
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 
 import {
   accountDeletionRequests,
@@ -210,7 +210,9 @@ export async function setUserStatus(
       suspendedAt: options.status === "suspended" ? new Date() : null,
       updatedAt: new Date(),
     })
-    .where(eq(users.id, options.userId));
+    // ★退会済み（deleted）には効かせない。★ 退会済みの ID に復帰を送ると active に戻り、
+    // «復帰» の記録だけが残っていた。
+    .where(and(eq(users.id, options.userId), isNull(users.deletedAt), ne(users.status, "deleted")));
   return (result.rowCount ?? 0) > 0;
 }
 

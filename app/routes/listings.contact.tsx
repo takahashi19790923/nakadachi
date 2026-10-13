@@ -64,6 +64,9 @@ export async function action({ request, context: rawContext, params }: Route.Act
       formData.get("_csrf"),
       readCookie(request, csrfCookieName(context.env)),
     );
+    // ★POST でも数える。★ 以前は loader（GET）だけに上限があり、POST を繰り返せば会話を
+    // 上限なしに作れた。
+    await enforceRateLimit(context.getDb(), "threadCreate", user.id);
 
     const { threadId } = await ensureThread({
       db: context.getDb(),

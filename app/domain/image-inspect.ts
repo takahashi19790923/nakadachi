@@ -115,31 +115,69 @@ function readJpegDimensions(
 }
 
 /**
+ * SOS の次から、符号化データの終わり（次のマーカーの手前）の位置を返す。
+ *
+ * 符号化データの中の 0xFF は、次が 0x00（詰め物）か RST0〜7（0xD0〜0xD7）なら
+ * まだデータの途中。それ以外のマーカー（DHT・SOS・EOI など）が来たらそこで終わり。
+ * マーカーの前に 0xFF が続いていても（詰め物）、続く間は読み飛ばして実際のマーカーを見る。
+ * マーカーが無いまま末尾に着いたら bytes.length を返す。
+ */
+function findJpegScanEnd(bytes: Uint8Array, start: number): number {
+  let position = start;
+  while (position < bytes.length) {
+    const found = bytes.indexOf(0xff, position);
+    if (found === -1) return bytes.length;
+
+    let next = found + 1;
+    while (bytes[next] === 0xff) next += 1;
+    const marker = bytes[next];
+    if (marker === undefined) return bytes.length; // 末尾の 0xFF だけ
+
+    if (marker === 0x00 || (marker >= 0xd0 && marker <= 0xd7)) {
+      position = next + 1; // データの途中。続ける
+      continue;
+    }
+    return found; // 実際のマーカー。詰め物の手前で区切る
+  }
+  return bytes.length;
+}
+
+/**
  * JPEG から APPn と COM を落とす。
  * Exif（APP1）に入っている ★GPS 座標・撮影日時・端末名★ がここで消える。
  * ICC プロファイル（APP2）も落ちるので、色味がわずかに変わることがある。
  * 位置情報が残るリスクのほうが大きいので、まとめて落とす。
+ *
+ * ★最初の EOI（0xFFD9）で切り、その後ろは捨てる。★
+ * EOI の後ろには、MPF の副画像（自前の Exif を持つ別の JPEG）・モーションフォトの動画・
+ * 端末ごとの trailer が付くことがある。「残りをそのまま通す」とこれらが丸ごと公開される。
+ * SOS のあとは符号化データを走査して EOI を探す（プログレッシブの複数の SOS にも対応）。
+ * EOI が無ければ符号化データの末尾までを出す（EOI は付け足さない）。
  */
 function stripJpegMetadata(bytes: Uint8Array): Uint8Array {
   const chunks: Uint8Array[] = [bytes.subarray(0, 2)]; // SOI
   let offset = 2;
+  let seenScan = false;
 
-  while (offset + 4 <= bytes.length) {
-    if (bytes[offset] !== 0xff) {
-      // 想定外の並び。ここから先はそのまま通す（壊すより残す）。
-      chunks.push(bytes.subarray(offset));
-      return concat(chunks);
-    }
+  // 読めない並びに当たったとき。
+  // 画像データに入る前は「壊すより残す」で残りをそのまま通す。
+  // 入ったあとは、残りに何が付いているか分からないので通さず、ここまでで終える。
+  const giveUp = (): Uint8Array => {
+    if (!seenScan) chunks.push(bytes.subarray(offset));
+    return concat(chunks);
+  };
+
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) return giveUp();
+    // マーカーの前の詰め物（0xFF の連続）は仕様で許される。読み飛ばして出力にも残さない。
+    while (bytes[offset + 1] === 0xff) offset += 1;
+    if (offset + 1 >= bytes.length) break; // 末尾に 0xFF が1つ残っているだけ
+
     const marker = bytes[offset + 1] ?? 0;
 
-    if (marker === 0xda) {
-      // SOS 以降はエントロピー符号化データ。最後までそのまま。
-      chunks.push(bytes.subarray(offset));
-      return concat(chunks);
-    }
     if (marker === 0xd9) {
       chunks.push(bytes.subarray(offset, offset + 2));
-      return concat(chunks);
+      return concat(chunks); // ★EOI。ここから後ろは捨てる★
     }
     if (marker >= 0xd0 && marker <= 0xd7) {
       chunks.push(bytes.subarray(offset, offset + 2));
@@ -148,9 +186,16 @@ function stripJpegMetadata(bytes: Uint8Array): Uint8Array {
     }
 
     const length = readUint16BE(bytes, offset + 2);
-    if (length < 2 || offset + 2 + length > bytes.length) {
-      chunks.push(bytes.subarray(offset));
-      return concat(chunks);
+    if (length < 2 || offset + 2 + length > bytes.length) return giveUp();
+
+    if (marker === 0xda) {
+      // SOS。見出しを残し、続く符号化データをマーカーの手前まで残す。
+      const dataStart = offset + 2 + length;
+      const dataEnd = findJpegScanEnd(bytes, dataStart);
+      chunks.push(bytes.subarray(offset, dataEnd));
+      seenScan = true;
+      offset = dataEnd;
+      continue;
     }
 
     const isAppSegment = marker >= 0xe0 && marker <= 0xef;

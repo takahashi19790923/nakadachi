@@ -60,14 +60,14 @@ describe("CSP 違反の受け口", () => {
     expect(JSON.stringify(fields)).not.toContain("01ABC");
   });
 
-  it("★大きな本文は読まずに捨てる★", async () => {
+  it("★大きな本文は 413 で止める★", async () => {
     const { warn, context } = ctx();
     const huge = "a".repeat(20 * 1024);
     const res = await call(
       post(JSON.stringify({ "csp-report": { "blocked-uri": huge } })),
       context,
     );
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(413);
     expect(warn).not.toHaveBeenCalled();
   });
 

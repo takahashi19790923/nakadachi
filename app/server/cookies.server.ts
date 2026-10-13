@@ -12,7 +12,12 @@ export function readCookie(request: Request, name: string): string | null {
     const index = part.indexOf("=");
     if (index === -1) continue;
     if (part.slice(0, index).trim() === name) {
-      return decodeURIComponent(part.slice(index + 1).trim());
+      // ★壊れたパーセント符号（%E0 など）で例外にしない。★ 投げると全画面が 500 になる。
+      try {
+        return decodeURIComponent(part.slice(index + 1).trim());
+      } catch {
+        return null;
+      }
     }
   }
   return null;
