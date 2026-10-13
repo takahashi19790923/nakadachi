@@ -5,7 +5,6 @@ import {
   bodyLimitFor,
   DEFAULT_BODY_LIMIT,
   hasBodyToLimit,
-  IMAGE_UPLOAD_BODY_LIMIT,
   limitRequestBody,
   readBodyBytesWithLimit,
   readBodyWithLimit,
@@ -90,17 +89,19 @@ describe("readBodyBytesWithLimit", () => {
 });
 
 describe("bodyLimitFor（パス → 入口の本文の上限）", () => {
-  it("画像の登録だけ大きい（枚数の上限 × 1枚の上限 ＋ 1MB）", () => {
-    expect(IMAGE_UPLOAD_BODY_LIMIT).toBe(10 * 5 * 1024 * 1024 + 1024 * 1024);
-    expect(bodyLimitFor("/listings/01ABC/images")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
-    expect(bodyLimitFor("/listings/01ABC/images/")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+  it("★写真の登録は入口では読まない（null）★", () => {
+    // 10枚×5MB を所有者の確認より前にメモリへ読むと、未ログインの相手でも
+    // Workers の 128MB を脅かせる。写真のルートは今までどおり所有者を確かめて
+    // から formData() で読む。
+    expect(bodyLimitFor("/listings/01ABC/images")).toBeNull();
+    expect(bodyLimitFor("/listings/01ABC/images/")).toBeNull();
   });
 
-  it("★JS が動いているときの送信先（.data・/_.data）も画像の上限★", () => {
+  it("★JS が動いているときの送信先（.data・/_.data）も同じ扱い★", () => {
     // react-router の single fetch はフォームの送信先に .data を付ける。
     // 素のパスだけ見ると、ふつうの利用者の写真が 64KB に当たって 413 になる。
-    expect(bodyLimitFor("/listings/01ABC/images.data")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
-    expect(bodyLimitFor("/listings/01ABC/images/_.data")).toBe(IMAGE_UPLOAD_BODY_LIMIT);
+    expect(bodyLimitFor("/listings/01ABC/images.data")).toBeNull();
+    expect(bodyLimitFor("/listings/01ABC/images/_.data")).toBeNull();
     // .data を付けても別のパスは借りられない。
     expect(bodyLimitFor("/listings/01ABC/images/extra.data")).toBe(DEFAULT_BODY_LIMIT);
     expect(bodyLimitFor("/listings/01ABC/images.data/x")).toBe(DEFAULT_BODY_LIMIT);
@@ -177,7 +178,7 @@ describe("limitRequestBody（入口で読んで詰め直す）", () => {
     const request = new Request("https://example.test/listings/01ABC/images", { method: "POST", body: form });
     expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
 
-    const limited = await limitRequestBody(request, IMAGE_UPLOAD_BODY_LIMIT);
+    const limited = await limitRequestBody(request, DEFAULT_BODY_LIMIT);
     expect(limited).not.toBeNull();
     const parsed = await limited!.formData();
     expect(parsed.get("title")).toBe("なかだち");

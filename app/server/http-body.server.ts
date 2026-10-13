@@ -1,5 +1,3 @@
-import { MAX_IMAGES_PER_LISTING, MAX_IMAGE_BYTES } from "~/domain/image-limits.ts";
-
 /**
  * 本文を上限まで読み、バイト列で返す。超えたら読むのをやめて null を返す。
  * 本文が無ければ空のバイト列。
@@ -56,18 +54,19 @@ const BODYLESS_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const DEFAULT_BODY_LIMIT = 64 * 1024;
 
 /**
- * 画像の登録だけ大きい。★1回の送信に複数枚が入る★（input は multiple で、1件の上限
- * MAX_IMAGES_PER_LISTING 枚を一度に選べる）ので、1枚ぶん（MAX_IMAGE_BYTES）ではなく
- * «枚数の上限 × 1枚の上限» に multipart の枠の分（1MB）を足した値。1枚ごとの大きさ・
- * 枚数は routes 側で見る。ここは «メモリに読む前の天井» でしかない。
- */
-export const IMAGE_UPLOAD_BODY_LIMIT =
-  MAX_IMAGES_PER_LISTING * MAX_IMAGE_BYTES + 1024 * 1024;
-
-/**
- * 写真の登録のパス。★`.data` と `/_.data` も含める。★ JS が動いているときの
- * フォームの送信先は react-router の single fetch で `/listings/<id>/images.data`
- * （索引ルートなら `/_.data`）になる。素のパスだけ見ると、ふつうの利用者の送信が
+ * 写真の登録のパス。★入口では読まない（null）。★
+ *
+ * 1回の送信に最大 MAX_IMAGES_PER_LISTING 枚（10枚×5MB）が入るので、入口で読むと
+ * 所有者を確かめる前に 50MB 超をメモリに載せることになる（未ログインの相手でも
+ * 起こせる。読んだかたまりと写しが同時に生きるので実際はその2倍）。Workers の
+ * メモリは isolate ごとに 128MB で、これは危ない。写真のルートは今までどおり
+ * 所有者を確かめてから formData() で読み、1枚ごとの大きさ・枚数は routes と
+ * サービスで見る。入口で上限を付けるなら content-length の足切りだけにするか、
+ * 1枚ずつの送信にしてから。
+ *
+ * ★`.data` と `/_.data` も含める。★ JS が動いているときのフォームの送信先は
+ * react-router の single fetch で `/listings/<id>/images.data`（パスが `/` で
+ * 終わるときは `/_.data`）になる。素のパスだけ見ると、ふつうの利用者の送信が
  * 既定の 64KB に当たって 413 になる。
  */
 const IMAGE_UPLOAD_PATH = /^\/listings\/[^/]+\/images(?:\.data|\/_\.data|\/)?$/;
@@ -83,7 +82,7 @@ const STRIPE_WEBHOOK_PATH = /^\/api\/stripe\/webhook\/?$/;
  */
 export function bodyLimitFor(pathname: string): number | null {
   if (STRIPE_WEBHOOK_PATH.test(pathname)) return null;
-  if (IMAGE_UPLOAD_PATH.test(pathname)) return IMAGE_UPLOAD_BODY_LIMIT;
+  if (IMAGE_UPLOAD_PATH.test(pathname)) return null;
   return DEFAULT_BODY_LIMIT;
 }
 
