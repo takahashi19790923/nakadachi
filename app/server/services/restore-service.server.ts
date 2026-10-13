@@ -266,8 +266,9 @@ export async function restoreDatabase(options: {
 /**
  * 戻したあとの中身を、書き出しファイルと突き合わせる。
  *
- * ★件数が合っただけでは足りない。★ 日付や JSON が壊れていても件数は合う。
- * 各表の先頭の行を、キーごとに値の形で比べる。
+ * いまは表ごとの件数を書き出しファイルと比べる。値が壊れていないこと（日付・JSON の往復）は
+ * test-integration/restore.test.ts の snapshot の比較が縛る。★本番の復元のときに走るのは件数の照合
+ * だけ★なので、«確認しました» はその範囲の言葉として読むこと。
  */
 export async function verifyRestore(options: {
   db: Db;

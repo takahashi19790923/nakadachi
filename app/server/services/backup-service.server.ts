@@ -115,9 +115,16 @@ export async function exportDatabase(options: {
   const stamp = today(options.now ?? new Date());
   const parts: string[] = [];
 
+  /*
+   * ★全表を同じ時点で読む。★ 表ごとに別々の文で読むと、途中で入った登録の子の行だけが
+   * 写しに入り（親の users が無い）、戻すときに外部キーで全体が巻き戻る＝«戻せない写し»
+   * になる。REPEATABLE READ の読み取り専用の取引で囲み、1つのスナップショットから読む。
+   */
+  await db.transaction(
+    async (tx) => {
   for (const table of TABLES) {
     // 件数を先に見る。上限を超えていたら中途半端な写しを残さない。
-    const countRows = await db.execute<{ n: number }>(
+    const countRows = await tx.execute<{ n: number }>(
       sql`select count(*)::int as n from ${sql.identifier(table)}`,
     );
     const count = countRows.rows[0]?.n ?? 0;
@@ -131,13 +138,16 @@ export async function exportDatabase(options: {
      * ★組み立ては DB 側。★ Worker は出来上がった文字列を受け取るだけ。
      * 空の表でも '[]' が返るようにしておく（null だと復旧側で分岐が増える）。
      */
-    const rows = await db.execute<{ data: string }>(
+    const rows = await tx.execute<{ data: string }>(
       sql`select coalesce(json_agg(t)::text, '[]') as data from ${sql.identifier(table)} t`,
     );
     const data = rows.rows[0]?.data ?? "[]";
 
     parts.push(`{"table":${JSON.stringify(table)},"rows":${count},"data":${data}}`);
   }
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 
   const body = `{"version":1,"exportedAt":${JSON.stringify(
     (options.now ?? new Date()).toISOString(),

@@ -61,7 +61,12 @@ const ALWAYS_REQUIRED = [
   "APP_ORIGIN",
   "SESSION_COOKIE_NAME",
   "ENVIRONMENT",
+  // 無いと turnstileExpectedHosts が TypeError（500）になる。503 の設定不備として表面化させる。
+  "TURNSTILE_EXPECTED_HOSTS",
+  "TURNSTILE_SITE_KEY",
 ] as const satisfies readonly (keyof AppEnv)[];
+
+const ENVIRONMENTS = ["development", "preview", "production"] as const;
 
 /**
  * Workers から渡ってきた env をアプリの型として扱えるようにする。
@@ -73,6 +78,13 @@ export function toAppEnv(env: unknown): AppEnv {
   }
   const candidate = env as AppEnv;
   const missing = ALWAYS_REQUIRED.filter((key) => !candidate[key]);
+  // ★ENVIRONMENT は決まった値だけ。★ "prod" のような誤記は、本番に noindex が付き isProduction が偽になる。
+  if (
+    candidate.ENVIRONMENT &&
+    !(ENVIRONMENTS as readonly string[]).includes(candidate.ENVIRONMENT)
+  ) {
+    throw new ConfigurationError(`ENVIRONMENT の値が不正です（development / preview / production）`);
+  }
   if (missing.length > 0) {
     // 値そのものは出さない。名前だけでも設定漏れは特定できる。
     throw new ConfigurationError(

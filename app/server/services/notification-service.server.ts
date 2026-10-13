@@ -266,6 +266,9 @@ export async function notifyExpiringListings(options: {
         sql`${listings.expiresAt} > now()`,
       ),
     )
+    // ★期限の近い順。★ 並びが無いと、200件で切ったときに送信済みの掲載が枠を占め、
+    // まだ送っていない掲載が選ばれないまま期限を迎えうる（送信済みは冪等キーで送らない）。
+    .orderBy(listings.expiresAt)
     .limit(options.limit ?? 200);
 
   let sent = 0;

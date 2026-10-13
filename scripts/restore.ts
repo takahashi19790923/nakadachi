@@ -93,7 +93,9 @@ async function main(): Promise<void> {
     console.log(
       `\n★注意★ 写しの環境（${backup.environment}）と流し込む先（${targetEnv}）が違います。`,
     );
-    if (!process.argv.includes("--yes")) {
+    // ★--yes では飛ばせない。★ 飛ばせると «preview の写しで本番を入れ替える» が何も聞かれずに通る。
+    // 飛ばすなら、食い違いの先の環境名を明示した旗を要求する。
+    if (!process.argv.includes(`--allow-env-mismatch=${targetEnv}`)) {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const answer = await rl.question("それでも続けますか？ yes と入力してください: ");
       rl.close();

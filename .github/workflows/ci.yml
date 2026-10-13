@@ -63,6 +63,11 @@ jobs:
       - name: build
         run: pnpm run build
 
+      # ★ビルド物に秘密が混ざっていないことを CI でも見る。★ deploy:* は通るが、
+      # 本番に出す Workers Builds のコマンドがこれを含むかはリポジトリの外なので、ここで必ず回す。
+      - name: ビルド物の秘密検査
+        run: pnpm run check:build-secrets
+
   e2e:
     name: E2E
     runs-on: ubuntu-latest

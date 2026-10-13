@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, lt, or } from "drizzle-orm";
 
 import { emailDeliveryLogs } from "~/db/schema/index.ts";
 import { ulid } from "~/domain/ulid.ts";
@@ -19,6 +19,9 @@ import type { EmailContent } from "./templates.server.ts";
 const OPS_TEMPLATES: ReadonlySet<EmailTemplateName> = new Set<EmailTemplateName>(
   ["ops_payment_alert", "ops_cron_alert"],
 );
+
+/** ログインに要るメール。通知の枠ではなく全体の枠だけを数える（予約ぶんを使える）。 */
+const AUTH_TEMPLATES: ReadonlySet<EmailTemplateName> = new Set<EmailTemplateName>(["login_code"]);
 
 /**
  * メール送信。
@@ -146,7 +149,15 @@ export async function sendEmail(
     .onConflictDoUpdate({
       target: emailDeliveryLogs.idempotencyKey,
       set: { status: "queued", errorCode: null, updatedAt: new Date() },
-      setWhere: eq(emailDeliveryLogs.status, "failed"),
+      // ★failed だけでなく、掴んだまま10分以上止まった queued も掴み直す。★ 更新の前に Worker が
+      // 打ち切られると、その冪等キーは永久に «送信中» になり、1日1通の警報が届かなくなる。
+      setWhere: or(
+        eq(emailDeliveryLogs.status, "failed"),
+        and(
+          eq(emailDeliveryLogs.status, "queued"),
+          lt(emailDeliveryLogs.updatedAt, new Date(Date.now() - 10 * 60 * 1000)),
+        ),
+      ),
     })
     .returning({ id: emailDeliveryLogs.id });
 
@@ -168,7 +179,14 @@ export async function sendEmail(
    * 知らせる経路まで止めてしまうため。
    */
   if (!OPS_TEMPLATES.has(options.template)) {
-    const budget = await consumeRateLimit(db, "emailGlobalDaily", "all");
+    // ★ログイン以外は通知の枠を先に数える。★ ログインのメールのぶんを残す（rate-limit.server.ts）。
+    const budget = AUTH_TEMPLATES.has(options.template)
+      ? await consumeRateLimit(db, "emailGlobalDaily", "all")
+      : await (async () => {
+          const notifications = await consumeRateLimit(db, "emailNotificationsDaily", "all");
+          if (!notifications.allowed) return notifications;
+          return consumeRateLimit(db, "emailGlobalDaily", "all");
+        })();
     if (!budget.allowed) {
       await db
         .update(emailDeliveryLogs)

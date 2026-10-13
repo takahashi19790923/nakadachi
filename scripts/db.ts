@@ -253,7 +253,12 @@ export function requireConnectionString(target: DbTarget): string {
    * localhost の空の DB には意味がない。ここを通せないと CI で E2E に
    * データベースを与えられず、DB を使う画面が一切検査できなくなる。
    */
-  if (/@(localhost|127\.0\.0\.1)[:/]/.test(value)) return value;
+  // ★文字列全体への正規表現では、パスワードに «@localhost:» を含む URL が素通りする。★
+  // 他の判定と同じく、解釈したホスト名で見る。
+  {
+    const host = parsePostgresUrl(value)?.host;
+    if (host === "localhost" || host === "127.0.0.1") return value;
+  }
 
   // ★指定した環境と、接続文字列が指すデータベースが一致するか。★
   const expected = EXPECTED_DATABASE[target];

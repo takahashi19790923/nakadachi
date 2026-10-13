@@ -1,4 +1,5 @@
 import { getApp } from "~/server/app-context";
+import { readBodyWithLimit } from "~/server/http-body.server";
 import type { Route } from "./+types/api.csp-report";
 
 /**
@@ -9,7 +10,8 @@ import type { Route } from "./+types/api.csp-report";
  * 利用者からは「ボタンが反応しない」としか見えず、報告も来ない。
  *
  * ★誰でも叩ける口である前提で作る。★
- *  - 本文は 8KB で切る（それ以上は読まずに捨てる）
+ *  - 本文は 8KB で切る（content-length が超えていれば読まずに 204 で捨てる。
+ *    付いていない・嘘の本文は 8KB まで読んで打ち切り、413 を返す）
  *  - ★DB には一切書かない。★ 件数を決めるのは攻撃者なので、
  *    永久に残る表へ書くと保管費用が攻撃手段になる
  *  - 残すのは「どの規則が」「どのホストを」止めたかだけ。
@@ -32,9 +34,15 @@ export async function action({ request, context: rawContext }: Route.ActionArgs)
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (declared > MAX_BYTES) return ACCEPTED;
 
+  /*
+   * ★content-length は自己申告で、chunked なら付かない。★ 上の足切りだけでは
+   * 本文を全部メモリに読んでしまうので、本文そのものを 8KB で打ち切る。
+   * 超えたものは 413（Worker の入口の上限と同じ形）。中身は読まない・残さない。
+   */
+  const text = await readBodyWithLimit(request, MAX_BYTES).catch(() => "");
+  if (text === null) return new Response(null, { status: 413 });
+
   try {
-    const text = await request.text();
-    if (text.length > MAX_BYTES) return ACCEPTED;
 
     const parsed = JSON.parse(text) as {
       "csp-report"?: Record<string, unknown>;

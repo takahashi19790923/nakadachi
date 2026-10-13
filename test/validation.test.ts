@@ -521,3 +521,17 @@ describe("★お仕事の応募の連絡先★", () => {
     expect(firstIssue(result, "applyUrl")).toContain("長すぎます");
   });
 });
+
+describe("★検索の価格欄の空欄は «指定なし»★", () => {
+  it("min・max が空文字なら undefined（0 にしない）", () => {
+    const parsed = parseSearchParams(new URL("https://example.test/search?q=x&min=&max="));
+    expect(parsed.min).toBeUndefined();
+    expect(parsed.max).toBeUndefined();
+  });
+
+  it("数字が入っていれば数として読む。壊れた値は指定なし", () => {
+    const parsed = parseSearchParams(new URL("https://example.test/search?min=100&max=abc"));
+    expect(parsed.min).toBe(100);
+    expect(parsed.max).toBeUndefined();
+  });
+});

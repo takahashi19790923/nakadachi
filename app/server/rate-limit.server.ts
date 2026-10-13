@@ -109,6 +109,12 @@ export const RATE_LIMITS = {
    * 上限に当たったことを知らせる経路まで一緒に止めたら意味がない。
    */
   emailGlobalDaily: { windowSeconds: 86_400, max: 400 },
+  /**
+   * ★通知（ログイン以外）の1日の総量。★ 全体の枠（400）より小さくして、残りをログインの
+   * メールに予約する。通知だけで全体を使い切ると、合言葉の無いこのサイトは誰も入れなくなる。
+   * 通知はこちらを先に数え、通らなければ全体の枠は消費しない。
+   */
+  emailNotificationsDaily: { windowSeconds: 86_400, max: 300 },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 export type RateLimitName = keyof typeof RATE_LIMITS;

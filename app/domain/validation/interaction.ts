@@ -74,8 +74,16 @@ export const searchParamsSchema = z.object({
     .regex(/^[0-9]{5}$/)
     .optional()
     .catch(undefined),
-  min: z.coerce.number().int().min(0).max(100_000_000).optional().catch(undefined),
-  max: z.coerce.number().int().min(0).max(100_000_000).optional().catch(undefined),
+  // ★空欄は «指定なし»。★ z.coerce.number() は Number("") を 0 にするので、価格欄を空のまま送ると
+  // «下限0・上限0» になり、0円の投稿しか出なかった（無料の投稿も外れる）。
+  min: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(0).max(100_000_000).optional().catch(undefined),
+  ),
+  max: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(0).max(100_000_000).optional().catch(undefined),
+  ),
   sort: z
     .enum(["newest", "price_asc", "price_desc", "expiring"])
     .default("newest")

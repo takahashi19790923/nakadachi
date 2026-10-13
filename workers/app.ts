@@ -12,6 +12,11 @@ import {
 import { createRequestDb } from "~/server/db.server.ts";
 import { toAppEnv, type AppEnv } from "~/server/env.server.ts";
 import { handleHealthCheck } from "~/server/health.server.ts";
+import {
+  bodyLimitFor,
+  hasBodyToLimit,
+  limitRequestBody,
+} from "~/server/http-body.server.ts";
 import { createLogger } from "~/server/logger.server.ts";
 import {
   applySecurityHeaders,
@@ -122,8 +127,43 @@ export default {
     }
 
     try {
-      // 監視用。認証不要・副作用なし・軽い。React Router を通さずに答える。
       const url = new URL(request.url);
+
+      /*
+       * ★状態を変える要求の本文は、React Router に渡す前にここで上限つきで読む。★
+       * request.formData() / text() は上限を持たず、content-length は自己申告
+       * （chunked なら無い）。未ログインの POST /login に 90MB を送られると、
+       * 全部をメモリに読んでしまう。（レビュー指摘。監査 DOS-01 の穴埋め）
+       *
+       * 上限はパスで決める（bodyLimitFor）。Stripe の Webhook は署名の検証に本文が
+       * 要り、自前の上限で読むので入口では触らない。読んだあとは同じ method・
+       * headers の Request に本文を詰め直して渡す（multipart もそのまま動く）。
+       */
+      let incoming = request;
+      if (hasBodyToLimit(request.method)) {
+        const limit = bodyLimitFor(url.pathname);
+        if (limit !== null) {
+          const limited = await limitRequestBody(request, limit);
+          if (!limited) {
+            return applySecurityHeaders(
+              new Response("Payload Too Large", {
+                status: 413,
+                headers: {
+                  "content-type": "text/plain; charset=utf-8",
+                  "cache-control": "no-store",
+                },
+              }),
+              env,
+              nonce,
+            );
+          }
+          // 型は cf（Cloudflare 固有の付帯情報）の型だけが違う。この Worker は
+          // request.cf を読まないので、詰め直しで落ちても困らない。
+          incoming = limited as typeof request;
+        }
+      }
+
+      // 監視用。認証不要・副作用なし・軽い。React Router を通さずに答える。
       if (url.pathname === "/api/health") {
         // ★監視の口にも他と同じヘッダを付ける。★（監査 HDR-01）Cookie は足さない。
         return applySecurityHeaders(
@@ -148,7 +188,7 @@ export default {
         setCookie,
       });
 
-      const response = await requestHandler(request, routerContext);
+      const response = await requestHandler(incoming, routerContext);
 
       const secured = applySecurityHeaders(response, env, nonce);
       /*
